@@ -1,0 +1,1775 @@
+openapi: 3.1.0
+info:
+  title: Nexus Lens API
+  version: 0.0.0
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: API health status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+  /api/v1/ready:
+    get:
+      operationId: getReady
+      responses:
+        "200":
+          description: API readiness status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+  /api/v1/me:
+    get:
+      operationId: getMe
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Authenticated app user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppUser"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/session:
+    post:
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login succeeded and set the session cookie.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Invalid login request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    delete:
+      operationId: deleteSession
+      security:
+        - sessionCookie: []
+      responses:
+        "204":
+          description: Session cookie cleared.
+  /api/v1/admin/status:
+    get:
+      operationId: getAdminStatus
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Admin-only status endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/admin/nexus-instances:
+    get:
+      operationId: listNexusInstances
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Configured Nexus instances.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [instances]
+                properties:
+                  instances:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NexusInstance"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/admin/indexing-schedules:
+    get:
+      operationId: listIndexingSchedules
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Indexing schedules.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schedules]
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IndexingSchedule"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      operationId: upsertIndexingSchedule
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertIndexingScheduleRequest"
+      responses:
+        "200":
+          description: Indexing schedule saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingSchedule"
+        "400":
+          description: Invalid schedule request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/admin/nexus/{nexus_instance_id}/rate-limits:
+    put:
+      operationId: updateNexusRateLimits
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateLimitSettings"
+      responses:
+        "200":
+          description: Nexus rate limits saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingControl"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/runs:
+    get:
+      operationId: listIndexRuns
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Recent index runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IndexRun"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      operationId: startIndexRun
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartIndexRunRequest"
+      responses:
+        "202":
+          description: Index run accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexRun"
+        "400":
+          description: Invalid run request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Index operation blocked by an active per-Nexus operation lock.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/overview:
+    get:
+      operationId: getAnalyticsOverview
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Analytics overview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsOverview"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/repositories:
+    get:
+      operationId: listRepositoryAnalytics
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Repository analytics rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repositories]
+                properties:
+                  repositories:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RepositoryAnalytics"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/images:
+    get:
+      operationId: listImageAnalytics
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Image analytics rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [images]
+                properties:
+                  images:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImageAnalytics"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/tags:
+    get:
+      operationId: listTagAnalytics
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/Search"
+        - name: older_than_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - name: never_downloaded
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Tag analytics rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tags]
+                properties:
+                  tags:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagAnalytics"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/trends:
+    get:
+      operationId: listTrendSeries
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryID"
+        - $ref: "#/components/parameters/ImageID"
+        - $ref: "#/components/parameters/MetricName"
+        - $ref: "#/components/parameters/PatternName"
+        - $ref: "#/components/parameters/StartDate"
+        - $ref: "#/components/parameters/EndDate"
+      responses:
+        "200":
+          description: Gap-aware daily trend series.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [points]
+                properties:
+                  points:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrendPoint"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/tag-patterns:
+    get:
+      operationId: listTagPatternAnalytics
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/OlderThanDays"
+        - $ref: "#/components/parameters/NeverDownloaded"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Tag pattern analytics rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [patterns]
+                properties:
+                  patterns:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagPatternAnalytics"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/tag-patterns/growth:
+    get:
+      operationId: listTagPatternGrowth
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/PatternName"
+        - $ref: "#/components/parameters/GrowthWindowDays"
+        - $ref: "#/components/parameters/NeverDownloaded"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Tag pattern growth rows grouped by repository, namespace, and pattern.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [growth]
+                properties:
+                  growth:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagPatternGrowth"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/tag-patterns/examples:
+    get:
+      operationId: listTagPatternExamples
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/PatternName"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Tag pattern example rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [examples]
+                properties:
+                  examples:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagPatternExample"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/tag-patterns/suggestions:
+    get:
+      operationId: listTagPatternSuggestions
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryName"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Suggested tag pattern candidates from unclassified tags.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suggestions]
+                properties:
+                  suggestions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagPatternSuggestion"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/admin/tag-patterns:
+    get:
+      operationId: listTagPatterns
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Tag pattern definitions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [patterns]
+                properties:
+                  patterns:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TagPattern"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    post:
+      operationId: upsertTagPattern
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertTagPatternRequest"
+      responses:
+        "200":
+          description: Saved tag pattern definition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagPattern"
+        "400":
+          description: Invalid tag pattern request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/admin/tag-patterns/reclassify:
+    post:
+      operationId: startTagReclassification
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagReclassificationRequest"
+      responses:
+        "202":
+          description: Tag reclassification run queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexRun"
+        "400":
+          description: Invalid reclassification request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/runs/{scan_run_id}/cancel:
+    post:
+      operationId: cancelIndexRun
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: scan_run_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Index run canceled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexRun"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/tasks:
+    get:
+      operationId: listIndexTasks
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: scan_run_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: Recent index tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks]
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IndexTask"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/tasks/{task_id}/retry:
+    post:
+      operationId: retryIndexTask
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Index task marked retryable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexTask"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/verification/findings:
+    get:
+      operationId: listVerificationFindings
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: Verification findings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [findings]
+                properties:
+                  findings:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VerificationFinding"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/verification/findings/{finding_id}/dismiss:
+    post:
+      operationId: dismissVerificationFinding
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: finding_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Verification finding dismissed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationFinding"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/nexus/{nexus_instance_id}/pause:
+    post:
+      operationId: pauseNexusIndexing
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PauseIndexingRequest"
+      responses:
+        "200":
+          description: Nexus indexing paused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingControl"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/index/nexus/{nexus_instance_id}/resume:
+    post:
+      operationId: resumeNexusIndexing
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: nexus_instance_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Nexus indexing resumed and circuit breaker cleared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexingControl"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+components:
+  parameters:
+    NexusInstanceID:
+      name: nexus_instance_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+    RepositoryName:
+      name: repository_name
+      in: query
+      required: false
+      schema:
+        type: string
+    RepositoryID:
+      name: repository_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+    ImageID:
+      name: image_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+    PatternName:
+      name: pattern_name
+      in: query
+      required: false
+      schema:
+        type: string
+    Search:
+      name: search
+      in: query
+      required: false
+      schema:
+        type: string
+    MetricName:
+      name: metric_name
+      in: query
+      required: false
+      schema:
+        type: string
+        default: docker_logical_bytes
+    StartDate:
+      name: start_date
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date
+    EndDate:
+      name: end_date
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date
+    OlderThanDays:
+      name: older_than_days
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    GrowthWindowDays:
+      name: growth_window_days
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 30
+    NeverDownloaded:
+      name: never_downloaded
+      in: query
+      required: false
+      schema:
+        type: boolean
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: nexus_lens_session
+  schemas:
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    AppUser:
+      type: object
+      required: [username, role]
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, read_only]
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+    LoginResponse:
+      type: object
+      required: [username, role, expires_at]
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, read_only]
+        expires_at:
+          type: string
+          format: date-time
+    NexusInstance:
+      type: object
+      required: [id, name, base_url, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        base_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    StartIndexRunRequest:
+      type: object
+      required: [scan_type]
+      properties:
+        nexus_name:
+          type: string
+        base_url:
+          type: string
+          format: uri
+        scan_type:
+          type: string
+          enum: [recent_sync, bounded_reindex, full_reconcile, verification, trend_snapshot]
+        task_key:
+          type: string
+        scope:
+          $ref: '#/components/schemas/IndexRunScope'
+    IndexRunScope:
+      type: object
+      properties:
+        repositories:
+          type: array
+          items:
+            type: string
+        window_days:
+          type: integer
+          minimum: 1
+    IndexingSchedule:
+      type: object
+      required:
+        - id
+        - nexus_instance_id
+        - nexus_name
+        - nexus_base_url
+        - scan_type
+        - name
+        - enabled
+        - schedule_expr
+        - interval_seconds
+        - timezone
+        - scope
+        - lock_conflict_behavior
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        nexus_name:
+          type: string
+        nexus_base_url:
+          type: string
+        scan_type:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        schedule_expr:
+          type: string
+        interval_seconds:
+          type: integer
+          format: int32
+        timezone:
+          type: string
+        scope:
+          $ref: "#/components/schemas/IndexRunScope"
+        lock_conflict_behavior:
+          type: string
+        next_run_at:
+          type: string
+          format: date-time
+        last_run_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpsertIndexingScheduleRequest:
+      type: object
+      required: [name, scan_type, interval_seconds, enabled]
+      properties:
+        nexus_name:
+          type: string
+        base_url:
+          type: string
+        name:
+          type: string
+        scan_type:
+          type: string
+          enum: [recent_sync, bounded_reindex, full_reconcile, verification, trend_snapshot]
+        interval_seconds:
+          type: integer
+          format: int32
+          minimum: 1
+        enabled:
+          type: boolean
+        due_now:
+          type: boolean
+        scope:
+          $ref: "#/components/schemas/IndexRunScope"
+    RateLimitSettings:
+      type: object
+      properties:
+        asset_list_rps:
+          type: number
+          minimum: 0
+        registry_manifest_rps:
+          type: number
+          minimum: 0
+        default_rps:
+          type: number
+          minimum: 0
+    AnalyticsOverview:
+      type: object
+      required:
+        - repository_count
+        - image_count
+        - active_tag_count
+        - tags_missing_digest_count
+        - tags_missing_manifest_count
+        - nexus_asset_bytes
+        - docker_logical_bytes
+        - docker_unique_layer_bytes
+      properties:
+        repository_count:
+          type: integer
+          format: int64
+        image_count:
+          type: integer
+          format: int64
+        active_tag_count:
+          type: integer
+          format: int64
+        tags_missing_digest_count:
+          type: integer
+          format: int64
+        tags_missing_manifest_count:
+          type: integer
+          format: int64
+        nexus_asset_bytes:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        docker_unique_layer_bytes:
+          type: integer
+          format: int64
+        last_successful_run_at:
+          type: string
+          format: date-time
+    TrendPoint:
+      type: object
+      required:
+        - snapshot_date
+        - missing
+      properties:
+        snapshot_date:
+          type: string
+          format: date
+        captured_at:
+          type: string
+          format: date-time
+        metric_value:
+          type: number
+          format: double
+        missing:
+          type: boolean
+    RepositoryAnalytics:
+      type: object
+      required:
+        - repository_id
+        - nexus_instance_id
+        - nexus_name
+        - repository_name
+        - image_count
+        - active_tag_count
+        - nexus_asset_bytes
+        - docker_logical_bytes
+        - docker_unique_layer_bytes
+      properties:
+        repository_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        nexus_name:
+          type: string
+        repository_name:
+          type: string
+        image_count:
+          type: integer
+          format: int64
+        active_tag_count:
+          type: integer
+          format: int64
+        nexus_asset_bytes:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        docker_unique_layer_bytes:
+          type: integer
+          format: int64
+        last_seen_at:
+          type: string
+          format: date-time
+    ImageAnalytics:
+      type: object
+      required:
+        - image_id
+        - repository_id
+        - nexus_instance_id
+        - nexus_name
+        - repository_name
+        - image_name
+        - active_tag_count
+        - docker_logical_bytes
+        - docker_unique_layer_bytes
+      properties:
+        image_id:
+          type: integer
+          format: int64
+        repository_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        nexus_name:
+          type: string
+        repository_name:
+          type: string
+        image_name:
+          type: string
+        active_tag_count:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        docker_unique_layer_bytes:
+          type: integer
+          format: int64
+        oldest_tag_first_seen_at:
+          type: string
+          format: date-time
+        newest_tag_last_seen_at:
+          type: string
+          format: date-time
+    TagAnalytics:
+      type: object
+      required:
+        - tag_id
+        - image_id
+        - repository_id
+        - nexus_instance_id
+        - nexus_name
+        - repository_name
+        - image_name
+        - tag
+        - digest
+        - media_type
+        - nexus_tag_size_bytes
+        - docker_logical_bytes
+        - docker_layer_bytes
+        - estimated_reclaimable_bytes
+        - shared_layer_bytes
+        - first_seen_at
+        - last_seen_at
+      properties:
+        tag_id:
+          type: integer
+          format: int64
+        image_id:
+          type: integer
+          format: int64
+        repository_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        nexus_name:
+          type: string
+        repository_name:
+          type: string
+        image_name:
+          type: string
+        tag:
+          type: string
+        digest:
+          type: string
+        media_type:
+          type: string
+        nexus_tag_size_bytes:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        docker_layer_bytes:
+          type: integer
+          format: int64
+        estimated_reclaimable_bytes:
+          type: integer
+          format: int64
+        shared_layer_bytes:
+          type: integer
+          format: int64
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        last_downloaded_at:
+          type: string
+          format: date-time
+    TagPattern:
+      type: object
+      required:
+        - id
+        - name
+        - display_name
+        - description
+        - tag_regex
+        - priority
+        - enabled
+        - built_in
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+        tag_regex:
+          type: string
+        priority:
+          type: integer
+          format: int32
+        enabled:
+          type: boolean
+        built_in:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpsertTagPatternRequest:
+      type: object
+      required: [name, tag_regex, priority, enabled]
+      properties:
+        name:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+        tag_regex:
+          type: string
+        priority:
+          type: integer
+          format: int32
+        enabled:
+          type: boolean
+    TagReclassificationRequest:
+      type: object
+      required: [nexus_instance_id]
+      properties:
+        nexus_instance_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+    TagPatternAnalytics:
+      type: object
+      required:
+        - pattern_name
+        - active_tag_count
+        - docker_logical_bytes
+        - never_downloaded_count
+      properties:
+        pattern_name:
+          type: string
+        active_tag_count:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        oldest_tag_first_seen_at:
+          type: string
+          format: date-time
+        never_downloaded_count:
+          type: integer
+          format: int64
+    TagPatternGrowth:
+      type: object
+      required:
+        - repository_name
+        - image_namespace
+        - pattern_name
+        - active_tag_count
+        - docker_logical_bytes
+        - growth_tag_count
+        - growth_logical_bytes
+        - never_downloaded_count
+      properties:
+        repository_name:
+          type: string
+        image_namespace:
+          type: string
+        pattern_name:
+          type: string
+        active_tag_count:
+          type: integer
+          format: int64
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        growth_tag_count:
+          type: integer
+          format: int64
+        growth_logical_bytes:
+          type: integer
+          format: int64
+        never_downloaded_count:
+          type: integer
+          format: int64
+        oldest_tag_first_seen_at:
+          type: string
+          format: date-time
+    TagPatternExample:
+      type: object
+      required:
+        - pattern_name
+        - repository_name
+        - image_name
+        - tag
+        - first_seen_at
+        - last_seen_at
+      properties:
+        pattern_name:
+          type: string
+        repository_name:
+          type: string
+        image_name:
+          type: string
+        tag:
+          type: string
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+    TagPatternSuggestion:
+      type: object
+      required:
+        - tag_shape
+        - tag_count
+        - example_tags
+        - suggested_regex
+      properties:
+        tag_shape:
+          type: string
+        tag_count:
+          type: integer
+          format: int64
+        example_tags:
+          type: array
+          items:
+            type: string
+        suggested_regex:
+          type: string
+    PauseIndexingRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    IndexingControl:
+      type: object
+      required: [nexus_instance_id, paused, circuit_failure_count]
+      properties:
+        nexus_instance_id:
+          type: integer
+          format: int64
+        paused:
+          type: boolean
+        paused_reason:
+          type: string
+        paused_at:
+          type: string
+          format: date-time
+        paused_by:
+          type: string
+        circuit_failure_count:
+          type: integer
+          format: int32
+        circuit_open_until:
+          type: string
+          format: date-time
+        last_failure_code:
+          type: string
+        last_failure_class:
+          type: string
+        asset_list_rps:
+          type: number
+        registry_manifest_rps:
+          type: number
+        default_rps:
+          type: number
+    IndexRun:
+      type: object
+      required:
+        - id
+        - nexus_instance_id
+        - scan_type
+        - status
+        - completed_tasks
+        - failed_tasks
+        - started_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        scan_type:
+          type: string
+        status:
+          type: string
+        phase:
+          type: string
+        completed_tasks:
+          type: integer
+          format: int64
+        failed_tasks:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    IndexTask:
+      type: object
+      required:
+        - id
+        - scan_run_id
+        - nexus_instance_id
+        - task_type
+        - task_key
+        - cost_class
+        - status
+        - attempt
+        - max_attempts
+        - available_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        scan_run_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        task_type:
+          type: string
+        task_key:
+          type: string
+        repository_name:
+          type: string
+        subject:
+          type: string
+        cost_class:
+          type: string
+        status:
+          type: string
+        attempt:
+          type: integer
+          format: int32
+        max_attempts:
+          type: integer
+          format: int32
+        available_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        locked_by:
+          type: string
+        error_code:
+          type: string
+        error_class:
+          type: string
+        error_message:
+          type: string
+        error_details: {}
+    VerificationFinding:
+      type: object
+      required:
+        - id
+        - severity
+        - finding_type
+        - status
+        - created_at
+        - last_seen_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        scan_run_id:
+          type: integer
+          format: int64
+        severity:
+          type: string
+        finding_type:
+          type: string
+        repository_name:
+          type: string
+        subject:
+          type: string
+        expected: {}
+        actual: {}
+        message:
+          type: string
+        remediation:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        dismissed_at:
+          type: string
+          format: date-time
+        metadata: {}
+    Problem:
+      type: object
+      required: [code, message, request_id, retryable]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+        retryable:
+          type: boolean

@@ -1,0 +1,256 @@
+# Nexus Lens Implementation Progress
+
+This file tracks implementation progress against the phased plan in `docs/nexus-lens-design.md`.
+
+## Current Phase
+
+Phase 7: Trends and storage analytics.
+
+## Completed
+
+- [x] Created design documents under `docs/`.
+- [x] Created monorepo directory layout.
+- [x] Added initial progress tracker.
+- [x] Added Go API, worker, and CLI placeholders.
+- [x] Added OpenAPI, migration, and `sqlc` placeholders.
+- [x] Added TypeScript/Vite app skeleton.
+- [x] Added Helm chart skeleton.
+- [x] Added Docker Compose skeleton.
+- [x] Added GitHub Actions skeletons.
+- [x] Added Makefile targets.
+- [x] Ran available local validation.
+- [x] Added Docker Compose web placeholder service.
+- [x] Added Nexus fixture scripts for waiting, password capture, EULA acceptance, Docker realm activation, Docker repository creation, image seed, tag mutation, and probing.
+- [x] Added Makefile fixture targets.
+- [x] Wired OpenAPI TypeScript generation.
+- [x] Wired `sqlc` generation.
+- [x] Wired Goose migration command and embedded startup migrations.
+- [x] Added DB-backed API readiness check.
+- [x] Added request IDs, structured request logs, panic recovery, and stable readiness problem responses.
+- [x] Added typed frontend health client using generated OpenAPI types.
+- [x] Added Postgres-managed app users with Argon2id password hashes.
+- [x] Added initial admin bootstrap from environment/Secret values.
+- [x] Added Basic Auth `/api/v1/me` endpoint for app users.
+- [x] Added Postgres-backed session login/logout, cookie auth, and global `admin`/`read_only` role checks.
+- [x] Expanded OpenAPI contract and generated TypeScript types for sessions and admin status.
+- [x] Added typed frontend session client and minimal login/logout UI.
+- [x] Expanded Helm values/schema for PostgreSQL Secret refs, initial admin Secret refs, and secure session-cookie configuration.
+- [x] Added Docker Compose PostgreSQL health check and gated API/worker startup on healthy PostgreSQL.
+- [x] Added Phase 3 PostgreSQL queue/run schema for scan runs, scopes, tasks, task attempts, operation locks, checkpoints, and verification findings.
+- [x] Added sqlc queries for durable task enqueue, `FOR UPDATE SKIP LOCKED` claims, completion, retry/fail transitions, stale lease recovery, and run counter refresh.
+- [x] Added indexing worker loop with lock-token leases, append-only task attempts, retry classification, stale lease reclamation, and structured task logs.
+- [x] Added authenticated index run API endpoints for listing runs and admin-triggered run enqueue.
+- [x] Added Nexus REST repository discovery task with basic auth/password-file support, repository upserts, and unsupported-format metadata.
+- [x] Added Docker tag scan task chained from repository discovery for hosted Docker repositories using Nexus Assets API pagination.
+- [x] Added Docker manifest/layer graph schema and manifest fetch batch tasks through the repository registry URL.
+- [x] Added Nexus asset metadata ingest for Assets API rows, including checksums, file size, content type, timestamps, and blob-store name.
+- [x] Added per-Nexus operation locks for exclusive `full_reconcile` and `bounded_reindex` runs, with API `409` conflict responses for blocked starts.
+- [x] Added automatic operation-lock release when the owning run reaches a terminal state.
+- [x] Added PostgreSQL-backed indexing schedules and worker scheduler processing with skipped-blocked run records.
+- [x] Added bounded reindex scope propagation with repository filters and whole-day `window_days` candidate windows.
+- [x] Added admin UI controls for recent sync, bounded reindex, full reconcile, repository filters, bounded windows, and blocking-operation confirmation.
+- [x] Added full-reconcile deletion confirmation for repository-scoped Docker tag walks with confirming run IDs on deleted tags.
+- [x] Added per-Nexus indexing pause/resume controls backed by PostgreSQL.
+- [x] Added worker-side cost-class rate limiting for Nexus Assets API and registry manifest requests.
+- [x] Added structured Nexus/registry HTTP and network error classification with retryable/non-retryable mapping and persisted error details.
+- [x] Added per-Nexus circuit breaker state that opens after repeated retryable upstream failures and blocks new task claims until expiry or manual resume.
+- [x] Added Phase 4 queue monitor API for listing recent scan tasks by run.
+- [x] Added admin retry action for failed/retryable tasks that also revives the parent run.
+- [x] Added admin cancel action for active runs that cancels pending/running tasks and releases operation locks.
+- [x] Added queue monitor UI with task status, attempts, error summary, retry controls, and run cancel buttons.
+- [x] Added typed full-reconcile confirmation modal and bounded-reindex confirmation warning in the UI.
+- [x] Added verification run task type with local index consistency checks for active Docker tags missing digests or manifest graphs.
+- [x] Added verification findings API, read-only findings view, and admin dismiss action.
+- [x] Added live PostgreSQL-backed Prometheus metrics for queue status, 24h run status, open verification findings, and oldest pending task age.
+- [x] Added optional Helm ServiceMonitor and PrometheusRule templates for queue age, failed runs, and high-severity verification findings.
+- [x] Added admin settings API/UI for Nexus instances, app-managed indexing schedules, and per-Nexus rate-limit tuning.
+- [x] Added Playwright coverage for run status, queue monitor, verification findings, admin settings, and full-reconcile typed confirmation.
+- [x] Added Phase 5 analytics SQL/API for overview, repository, image, and tag explorer rows.
+- [x] Added child-manifest digest metadata for Docker/OCI index manifests so manifest-list tags can roll up child layer bytes.
+- [x] Added Phase 5 dashboard and artifact explorer UI with repository/search/age/never-downloaded filters.
+- [x] Added Nexus asset byte, Docker logical byte, unique layer byte, shared layer byte, and estimated reclaimable byte views.
+- [x] Added Playwright coverage for analytics dashboard rendering and explorer filter query parameters.
+- [x] Added Phase 6 PostgreSQL schema for editable tag patterns and per-tag classifications.
+- [x] Seeded built-in tag patterns for SemVer, channels, PR tags, long SHAs, short SHAs, ticket branches, feature branches, dates, environments, build numbers, and opaque generated tags.
+- [x] Added sqlc queries for listing/editing tag patterns, classifying active tags, pattern rollups, and pattern examples.
+- [x] Added worker-side tag classification during Docker tag scan tasks.
+- [x] Added queued tag reclassification run/task support.
+- [x] Added tag pattern API/UI for definitions, admin edits, analytics rollups, examples, and reclassification.
+- [x] Added unclassified tag shape suggestions with suggested regex starters using built-in PostgreSQL regex functions.
+- [x] Added Phase 6 current-index pattern growth API/UI grouped by repository, image namespace/prefix, and pattern with active tags, growth tags, bytes, and never-pulled counts.
+- [x] Added Phase 7 `trend_snapshots` schema with daily uniqueness, lookup indexes, and no PostgreSQL extension requirements.
+- [x] Added sqlc queries for capturing daily trend snapshots, listing gap-aware daily series, listing metric names, and deleting snapshots before a retention cutoff.
+- [x] Added queued `trend_snapshot` scan/task support for manual and scheduled runs with worker-side 365-day retention cleanup.
+- [x] Added read-only trends API for storage and tag-pattern metric time series with explicit missing-day points.
+
+## Validation
+
+- [x] `gofmt -w ./cmd ./internal`
+- [x] `go test ./...` from a fresh interactive zsh with Go 1.26.4.
+- [x] `helm template nexus-lens ./charts/nexus-lens`
+- [x] `bash -n test/fixtures/nexus/*.sh`
+- [x] `docker compose -f deploy/compose/compose.yaml config`
+- [x] Live Nexus CE EULA acceptance.
+- [x] Live Nexus Docker hosted repository creation.
+- [x] Live Docker fixture seed for two hosted repositories.
+- [x] Live tag mutation fixture for moved, deleted, and recreated tags.
+- [x] Live regclient tag-list and manifest-fetch proof against Nexus.
+- [x] Live Phase 1 PostgreSQL migration/index validation.
+- [x] Fixed shell Go mismatch by configuring mise Go 1.26.4 and unsetting exported `GOROOT` after mise activation.
+- [x] Frontend dependencies installed and `npm run typecheck` passes.
+- [x] Live Docker Compose stack execution for Nexus/PostgreSQL/web.
+- [x] Live Docker Compose stack execution for API/worker.
+- [x] Live Nexus fixture seed.
+- [x] `make openapi`
+- [x] `make sqlc`
+- [x] `make migrate`
+- [x] `make test`
+- [x] `make typecheck`
+- [x] `npm run build`
+- [x] `make helm-template`
+- [x] `make compose-config`
+- [x] Runtime API/worker embedded migrations against Compose Postgres.
+- [x] API CORS health call for local Compose UI.
+- [x] Initial admin bootstrap creates one admin user and skips after users exist.
+- [x] Basic Auth `/api/v1/me` succeeds for the bootstrapped admin and returns stable `401` problem JSON for invalid credentials.
+- [x] Runtime session login sets an HttpOnly cookie for the bootstrapped admin.
+- [x] Runtime cookie-backed `/api/v1/me` and admin-only `/api/v1/admin/status` succeed for the admin role.
+- [x] Runtime logout revokes the session and cookie-backed `/api/v1/me` returns stable `401` problem JSON afterward.
+- [x] Runtime Compose API/worker startup waits for PostgreSQL health and migrations reach version 4.
+- [x] Frontend TypeScript typecheck and production build pass with the session login/logout UI.
+- [x] Phase 3 migration `000005_indexing_queue.sql` applies locally and reaches Goose version 5.
+- [x] Runtime admin-triggered index run API enqueues a durable task and the worker completes it, moving the run to `succeeded` with `completed_tasks = 1`.
+- [x] Runtime API/worker structured logs show migration version 5 and task start/complete events with worker ID, task ID, run ID, task type, and attempt.
+- [x] Runtime repository discovery against the seeded Nexus finds 9 repositories, marks 2 hosted Docker repositories supported, and marks 7 non-Docker or non-hosted repositories unsupported.
+- [x] Runtime Docker tag scan indexes 2 hosted Docker repositories, 1 image per repo, and 12 active tags total from the seeded Nexus fixture.
+- [x] Runtime manifest enrichment stores Docker manifests/layers for both hosted Docker repositories.
+- [x] Runtime asset ingest stores 49 assets for `docker-hosted-a` and 20 assets for `docker-hosted-b`.
+- [x] Runtime API/worker embedded migrations reach Goose version 7.
+- [x] Runtime `full_reconcile` start acquires an exclusive operation lock and blocks a concurrent `recent_sync` with `409 operation_lock_conflict`.
+- [x] Runtime worker completion of the locked `full_reconcile` releases the operation lock.
+- [x] Runtime seeded recent-sync schedule creates a scheduler-triggered run and records skipped-blocked runs when an exclusive operation lock is active.
+- [x] Live bounded reindex run 11 with scope `docker-hosted-a` and `window_days=30` completes successfully with exactly 3 tasks for one hosted Docker repository.
+- [x] Live bounded reindex run/task payloads persist `{"since":"2026-05-29T00:00:00Z","window_days":30,"repositories":["docker-hosted-a"]}` and release the operation lock after success.
+- [x] Phase 3 migration `000009_container_tag_delete_confirmation.sql` applies locally and reaches Goose version 9.
+- [x] Live scoped `full_reconcile` run 12 confirms one DB-seeded stale tag as deleted and records `deleted_confirmed_run_id=12`.
+- [x] Phase 3 migration `000010_indexing_controls.sql` applies locally and reaches Goose version 10.
+- [x] Live pause API sets `nexus_indexing_controls.paused=true`; a queued run remains pending and unclaimed while paused.
+- [x] Live resume API clears pause state; the previously pending run 13 completes successfully.
+- [x] Live intentionally failing run 14 stores `nexus_repository_list_network_failed`, `error_class=network`, structured `error_details`, and opens the per-Nexus circuit breaker.
+- [x] Live queue task API lists task 41 for run 14 with retry status and attempt metadata.
+- [x] Live retry endpoint marks task 41 `retryable`, extends `max_attempts`, and revives parent run 14.
+- [x] Live cancel endpoint cancels run 14 and task 41, leaving Nexus indexing resumed and circuit state cleared.
+- [x] `go test ./...`
+- [x] `make typecheck`
+- [x] `npm run build`
+- [x] Live `/metrics` returns PostgreSQL-backed `nexus_lens_scan_tasks`, `nexus_lens_scan_runs_24h`, `nexus_lens_verification_findings`, and `nexus_lens_queue_oldest_pending_age_seconds`.
+- [x] Live verification run 17 completed successfully and created an open `docker_tag_digest_missing` finding for synthetic corrupt tag `verification-corrupt:missing-digest`.
+- [x] Live verification findings API returns the open finding with expected/actual JSON and remediation text.
+- [x] `helm template nexus-lens ./charts/nexus-lens --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true`
+- [x] Phase 4 migration `000011_admin_settings.sql` applies locally and reaches Goose version 11.
+- [x] Live admin Nexus instances API returns the configured `local` Nexus instance.
+- [x] Live admin indexing schedule API creates and lists `verification-daily` for `docker-hosted-a`.
+- [x] Live admin rate-limit API persists and returns `asset_list_rps=3`, `registry_manifest_rps=1.5`, and `default_rps=6`.
+- [x] `cd web && npm run test:e2e`
+- [x] Phase 5 live scoped `full_reconcile` run 20 completed successfully for `docker-hosted-a` and `docker-hosted-b` with 5 completed tasks and 0 failed tasks.
+- [x] Live analytics overview returns 2 hosted Docker repositories, 3 images, 12 active tags, 0 missing digests, 0 missing manifests, `nexus_asset_bytes=43201`, `docker_logical_bytes=14724`, and `docker_unique_layer_bytes=3425`.
+- [x] Live tag analytics returns one row per active tag after download timestamp aggregation; duplicate rows from multi-asset checksum joins are fixed.
+- [x] Live manifest-list analytics stores `child_manifest_digests` metadata and returns nonzero `docker_layer_bytes` and `shared_layer_bytes` for index-backed tags.
+- [x] Live shared-layer fixture check shows `unique_bytes=0` and `shared_bytes=14180`, matching the seeded fixture where all active layers remain referenced by multiple active tags.
+- [x] `cd web && npm run build`
+- [x] Phase 6 migration `000012_tag_patterns.sql` applies locally and reaches Goose version 12.
+- [x] Live Phase 6 bounded reindex run 21 for `docker-hosted-a` completed successfully with 3 completed tasks and 0 failed tasks.
+- [x] Live built-in tag pattern seed creates 11 enabled built-in patterns without requiring PostgreSQL extensions.
+- [x] Live fixture tags classify as expected: `v1.2.3` and `1.2.3` as `semver`, `latest` and `stable` as `channel`, `pr-123` as `pull_request`, `a1b2c3d` as `short_sha`, long SHA as `long_sha`, and `feat-dvo-1313-hsdfjw` as `feature_branch`.
+- [x] Live tag pattern definitions API returns the 11 built-in patterns.
+- [x] Live tag pattern analytics API returns expected rollups for `docker-hosted-a` including `semver`, `channel`, `pull_request`, `short_sha`, `long_sha`, and `feature_branch`.
+- [x] Live tag pattern examples API returns SemVer examples `1.2.3` and `v1.2.3`.
+- [x] Live tag reclassification run 23 completed successfully with 1 completed task and 0 failed tasks.
+- [x] Live unclassified suggestion API returns shape `A-0-A` and suggested regex `^[A-Za-z]+-[0-9]+-[A-Za-z]+$` for a temporary validation tag, then the temporary tag is removed.
+- [x] `make openapi`
+- [x] `go test ./...`
+- [x] `make typecheck`
+- [x] `cd web && npm run build`
+- [x] `cd web && npm run test:e2e`
+- [x] `make helm-template`
+- [x] `make compose-config`
+- [x] Phase 7 migration `000013_trend_snapshots.sql` applies locally and reaches Goose version 13.
+- [x] Live `trend_snapshot` run 25 completed successfully with 1 completed task and 0 failed tasks.
+- [x] Live trend snapshot capture wrote daily storage and tag-pattern metric rows for Nexus 1.
+- [x] Live trends API returns exactly one Nexus-level `docker_logical_bytes` point for `2026-06-28`.
+- [x] Live trends API returns an explicit missing point for `2026-06-27` when querying a two-day range.
+
+## In Progress
+
+- [x] Run `docker compose -f deploy/compose/compose.yaml up -d postgres nexus web`.
+- [x] Capture Nexus admin password with `make fixture-capture-password`.
+- [x] Accept Nexus CE EULA with `make fixture-accept-eula`.
+- [x] Enable the Docker Bearer Token Realm with `make fixture-enable-docker-realm`.
+- [x] Create hosted Docker repositories with `make fixture-create-repos`.
+- [x] Push deterministic fixture images with `make fixture-seed`.
+- [x] Probe Nexus REST and Docker Registry APIs with `make fixture-probe`.
+- [x] Run tag mutation fixture with `make fixture-mutate`.
+- [x] Prove regclient library access to tags/manifests.
+- [x] Add thin PostgreSQL schema/query spike for Phase 1 fixture results.
+- [x] Decide whether to standardize local Go execution on mise or fix the shell `GOROOT`/PATH mismatch.
+- [x] Install frontend dependencies and run `npm run typecheck`.
+- [x] Wire OpenAPI generation.
+- [x] Wire `sqlc` generation.
+- [x] Wire `goose` migration command.
+- [x] Add real Docker Compose health checks after live stack behavior is observed.
+- [x] Add Postgres-managed app users, password hashing, and initial admin bootstrap.
+- [x] Add basic auth for app users.
+- [x] Add session middleware and read-only/admin role checks.
+- [x] Expand Helm values/schema for auth and app Secret references.
+- [x] Add PostgreSQL-backed durable queue foundation.
+- [x] Add worker claim/attempt/complete/retry foundation.
+- [x] Add first authenticated API-triggered index run path.
+- [x] Add Nexus instance config and credential validation foundation.
+- [x] Add hosted repository discovery with unsupported formats marked skipped.
+- [x] Add Docker image/tag scan.
+- [x] Add manifest/layer graph and asset metadata ingest.
+- [x] Add per-Nexus operation locks.
+- [x] Add scheduler-triggered runs.
+- [x] Add bounded reindex repository/window scope.
+- [x] Add full reconcile deletion confirmation.
+- [x] Add rate limiting, backoff, circuit breaker, pause/resume, and detailed Nexus error classification.
+- [x] Add Phase 4 index run status and queue monitor foundation.
+- [x] Add Phase 4 retry, cancel, pause, and resume controls.
+- [x] Add Phase 4 confirmation modals and typed confirmation for full reconcile.
+- [x] Add Phase 4 verification checks and verification findings view.
+- [x] Add Phase 4 Prometheus metrics, log correlation, and alert surfaces.
+- [x] Add Phase 4 admin settings for Nexus instances, schedules, and per-Nexus rate limits.
+- [x] Add Playwright coverage for run status and queue monitor flows.
+- [x] Add Phase 5 overview dashboard.
+- [x] Add Phase 5 repository/image/tag explorer.
+- [x] Add Phase 5 tag age and last-pull views.
+- [x] Add Phase 5 unique/shared/reclaimable byte calculations.
+- [x] Add Phase 5 Nexus asset byte and Docker logical byte views.
+- [x] Add built-in Phase 6 tag pattern definitions.
+- [x] Add tag classification during indexing.
+- [x] Add tag reclassification task when patterns change.
+- [x] Add tag pattern analytics API and UI.
+- [x] Add pattern examples, unclassified tag explorer, and current-index pattern growth.
+- [x] Add pattern metrics by Nexus, repository, image namespace/prefix, age, last downloaded status, bytes, and growth.
+- [x] Add admin-editable tag pattern definitions.
+- [x] Add discovery workflow for frequent unclassified shapes and suggested regex patterns.
+- [x] Add Phase 7 trend snapshot schema, queries, and retention cleanup.
+- [x] Add trend snapshot worker task/schedule support.
+- [x] Add daily time-series APIs for storage and tag pattern trends.
+
+### Resume Placeholder
+
+Pick back up in Phase 7 here. The foundation is in place: migration `000013_trend_snapshots.sql`, `db/queries/trend_snapshots.sql`, queued `trend_snapshot` runs, the read-only trends API, and live validation against Compose. Next implement the remaining Phase 7 metrics and UI.
+
+- [ ] Add freshness, reclaimable-byte, and top-mover trend metrics.
+- [ ] Add trend visualizations with missing-day gaps and links back to filtered explorer views.
+
+## Notes
+
+- Phase 0 should remain lightweight. No Nexus integration logic is expected until Phase 1.
+- The first runnable service should expose `/api/v1/health` and `/api/v1/ready`.
+- `docs/nexus-lens-indexing-queue-design.md` is the source for queue behavior when Phase 3 starts.
+- Phase 1 fixture scripts assume Nexus Docker hosted repositories are reachable through connector ports `5001` and `5002`.
+- The local Compose stack currently runs Nexus, PostgreSQL, API, and worker. The placeholder web service is stopped locally while the real Vite UI runs on `http://127.0.0.1:5173/`.
+- Go 1.26.4 is configured in mise. `.zshrc` unsets `GOROOT` after mise activation so Go can infer its own root.
+- Bounded reindex still pages Nexus Assets API for selected repositories because Nexus does not expose a server-side changed-since cursor. The bounded window limits tag refresh and registry manifest enrichment to assets whose Nexus timestamps are inside the window.

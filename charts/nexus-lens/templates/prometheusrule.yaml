@@ -1,0 +1,37 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nexus-lens.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+    app.kubernetes.io/component: api
+{{- with .Values.metrics.prometheusRule.labels }}
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  groups:
+    - name: nexus-lens.indexing
+      rules:
+        - alert: NexusLensQueueBacklogOld
+          expr: nexus_lens_queue_oldest_pending_age_seconds > {{ .Values.metrics.prometheusRule.queueAgeSeconds }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Nexus Lens indexing queue has old pending work
+        - alert: NexusLensFailedRuns
+          expr: sum(nexus_lens_scan_runs_24h{status="failed"}) >= {{ .Values.metrics.prometheusRule.failedRuns24h }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Nexus Lens has failed index runs in the last 24 hours
+        - alert: NexusLensHighVerificationFindings
+          expr: sum(nexus_lens_verification_findings{status="open",severity="high"}) >= {{ .Values.metrics.prometheusRule.highVerificationFindings }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Nexus Lens has high severity open verification findings
+{{- end }}

@@ -1,0 +1,12 @@
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY db ./db
+COPY cmd ./cmd
+COPY internal ./internal
+RUN go build -o /out/nexus-lens-worker ./cmd/nexus-lens-worker
+
+FROM gcr.io/distroless/base-debian12
+COPY --from=build /out/nexus-lens-worker /nexus-lens-worker
+ENTRYPOINT ["/nexus-lens-worker"]

@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nexus-lens.fullname" . }}-api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          env:
+            - name: NEXUS_LENS_ADDR
+              value: ":{{ .Values.api.port }}"
+            - name: NEXUS_LENS_SESSION_COOKIE_SECURE
+              value: {{ .Values.auth.session.cookieSecure | quote }}
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.hostKey }}
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.portKey }}
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.databaseKey }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.usernameKey }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: {{ .Values.postgres.passwordKey }}
+            - name: PGSSLMODE
+              value: {{ .Values.postgres.sslMode | quote }}
+            - name: NEXUS_LENS_INITIAL_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.initialAdmin.existingSecret }}
+                  key: {{ .Values.auth.initialAdmin.usernameKey }}
+            - name: NEXUS_LENS_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.initialAdmin.existingSecret }}
+                  key: {{ .Values.auth.initialAdmin.passwordKey }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http

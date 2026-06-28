@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: nexus_lens
+      POSTGRES_USER: nexus_lens
+      POSTGRES_PASSWORD: nexus_lens
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus_lens -d nexus_lens"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  nexus:
+    image: sonatype/nexus3:3.88.0
+    ports:
+      - "8081:8081"
+      - "5001:5001"
+      - "5002:5002"
+    volumes:
+      - nexus-data:/nexus-data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    environment:
+      NEXUS_LENS_ADDR: ":5601"
+      NEXUS_LENS_DATABASE_URL: "postgres://nexus_lens:nexus_lens@postgres:5432/nexus_lens?sslmode=disable"
+      NEXUS_LENS_CORS_ORIGIN: "http://localhost:5173"
+      NEXUS_LENS_SESSION_COOKIE_SECURE: "false"
+      NEXUS_LENS_INITIAL_ADMIN_USERNAME: "admin"
+      NEXUS_LENS_INITIAL_ADMIN_PASSWORD: "admin"
+    ports:
+      - "5601:5601"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NEXUS_LENS_DATABASE_URL: "postgres://nexus_lens:nexus_lens@postgres:5432/nexus_lens?sslmode=disable"
+      NEXUS_LENS_NEXUS_USERNAME: "admin"
+      NEXUS_LENS_NEXUS_PASSWORD_FILE: "/run/secrets/nexus-admin-password"
+      NEXUS_LENS_SEED_RECENT_SYNC_SCHEDULE: "true"
+      NEXUS_LENS_SCHEDULE_DUE_NOW: "true"
+      NEXUS_LENS_SCHEDULE_INTERVAL_SECONDS: "1800"
+    volumes:
+      - ./.nexus-admin-password:/run/secrets/nexus-admin-password:ro
+
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - "5173:80"
+    volumes:
+      - ./web-placeholder.html:/usr/share/nginx/html/index.html:ro
+
+volumes:
+  postgres-data:
+  nexus-data:

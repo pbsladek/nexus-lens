@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas", "port"],
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["replicas"],
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "existingSecret",
+        "hostKey",
+        "portKey",
+        "databaseKey",
+        "usernameKey",
+        "passwordKey",
+        "sslMode"
+      ],
+      "properties": {
+        "existingSecret": { "type": "string", "minLength": 1 },
+        "hostKey": { "type": "string", "minLength": 1 },
+        "portKey": { "type": "string", "minLength": 1 },
+        "databaseKey": { "type": "string", "minLength": 1 },
+        "usernameKey": { "type": "string", "minLength": 1 },
+        "passwordKey": { "type": "string", "minLength": 1 },
+        "sslMode": {
+          "type": "string",
+          "enum": ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "initialAdmin"],
+      "properties": {
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cookieSecure"],
+          "properties": {
+            "cookieSecure": { "type": "boolean" }
+          }
+        },
+        "initialAdmin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret", "usernameKey", "passwordKey"],
+          "properties": {
+            "existingSecret": { "type": "string", "minLength": 1 },
+            "usernameKey": { "type": "string", "minLength": 1 },
+            "passwordKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serviceMonitor", "prometheusRule"],
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "interval", "labels"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string", "minLength": 1 },
+            "labels": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "labels",
+            "queueAgeSeconds",
+            "failedRuns24h",
+            "highVerificationFindings"
+          ],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "labels": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "queueAgeSeconds": { "type": "integer", "minimum": 1 },
+            "failedRuns24h": { "type": "integer", "minimum": 1 },
+            "highVerificationFindings": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

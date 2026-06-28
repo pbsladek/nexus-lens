@@ -1,0 +1,21 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nexus-lens.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+    app.kubernetes.io/component: api
+{{- with .Values.metrics.serviceMonitor.labels }}
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

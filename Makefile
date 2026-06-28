@@ -1,0 +1,65 @@
+.PHONY: format test web-deps typecheck openapi sqlc migrate helm-template e2e docker-build compose-config fixture-wait fixture-capture-password fixture-accept-eula fixture-enable-docker-realm fixture-create-repos fixture-seed fixture-mutate fixture-probe
+
+DB_URL ?= postgres://nexus_lens:nexus_lens@localhost:5432/nexus_lens?sslmode=disable
+GO_TEST ?= env -u GOROOT go test
+WEB_NODE_MODULES := web/node_modules/.package-lock.json
+
+format:
+	gofmt -w ./cmd ./internal
+
+test:
+	$(GO_TEST) ./...
+
+web-deps: $(WEB_NODE_MODULES)
+
+$(WEB_NODE_MODULES): web/package.json web/package-lock.json
+	cd web && npm ci
+
+typecheck: web-deps
+	cd web && npm run typecheck
+
+openapi: web-deps
+	cd web && npm run generate:api
+
+sqlc:
+	env -u GOROOT go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.29.0 generate
+
+migrate:
+	env -u GOROOT go run github.com/pressly/goose/v3/cmd/goose@v3.27.1 -dir db/migrations postgres "$(DB_URL)" up
+
+helm-template:
+	helm template nexus-lens ./charts/nexus-lens
+
+e2e:
+	@echo "E2E is not wired yet"
+
+docker-build:
+	docker build -f Dockerfile.api -t nexus-lens-api:dev .
+	docker build -f Dockerfile.worker -t nexus-lens-worker:dev .
+
+compose-config:
+	docker compose -f deploy/compose/compose.yaml config
+
+fixture-wait:
+	test/fixtures/nexus/wait-for-nexus.sh
+
+fixture-capture-password:
+	test/fixtures/nexus/capture-admin-password.sh
+
+fixture-accept-eula:
+	test/fixtures/nexus/accept-eula.sh
+
+fixture-enable-docker-realm:
+	test/fixtures/nexus/enable-docker-realm.sh
+
+fixture-create-repos:
+	test/fixtures/nexus/create-docker-repos.sh
+
+fixture-seed:
+	test/fixtures/nexus/build-and-push-images.sh
+
+fixture-mutate:
+	test/fixtures/nexus/mutate-tags.sh
+
+fixture-probe:
+	test/fixtures/nexus/probe.sh

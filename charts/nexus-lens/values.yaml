@@ -1,0 +1,39 @@
+image:
+  repository: ghcr.io/example/nexus-lens
+  tag: dev
+
+api:
+  replicas: 1
+  port: 5601
+
+worker:
+  replicas: 1
+
+postgres:
+  existingSecret: nexus-lens-postgres
+  hostKey: host
+  portKey: port
+  databaseKey: dbname
+  usernameKey: user
+  passwordKey: password
+  sslMode: require
+
+auth:
+  session:
+    cookieSecure: true
+  initialAdmin:
+    existingSecret: nexus-lens-initial-admin
+    usernameKey: username
+    passwordKey: password
+
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    queueAgeSeconds: 1800
+    failedRuns24h: 1
+    highVerificationFindings: 1
