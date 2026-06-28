@@ -61,7 +61,11 @@ type IndexingService interface {
 	ListRepositoryAnalytics(ctx context.Context, req AnalyticsListRequest) ([]RepositoryAnalytics, error)
 	ListImageAnalytics(ctx context.Context, req AnalyticsListRequest) ([]ImageAnalytics, error)
 	ListTagAnalytics(ctx context.Context, req AnalyticsListRequest) ([]TagAnalytics, error)
+	ListPackageFormatRepositories(ctx context.Context, req AnalyticsListRequest) ([]PackageFormatRepository, error)
 	ListTrendSeries(ctx context.Context, req TrendSeriesRequest) ([]TrendPoint, error)
+	ListTrendTopMovers(ctx context.Context, req TrendTopMoversRequest) ([]TrendTopMover, error)
+	SimulateCleanupPolicy(ctx context.Context, req CleanupSimulationRequest) (CleanupSimulationResult, error)
+	RequestCleanupExecution(ctx context.Context, req CleanupExecutionRequest) (CleanupExecution, error)
 	ListTagPatterns(ctx context.Context) ([]TagPattern, error)
 	UpsertTagPattern(ctx context.Context, req UpsertTagPatternRequest) (TagPattern, error)
 	StartTagReclassification(ctx context.Context, req TagReclassificationRequest) (IndexRun, error)
@@ -215,11 +219,101 @@ type TrendSeriesRequest struct {
 	EndDate         string
 }
 
+type TrendTopMoversRequest struct {
+	NexusInstanceID int64
+	RepositoryID    int64
+	ImageID         int64
+	MetricName      string
+	PatternName     string
+	StartDate       string
+	EndDate         string
+	Limit           int32
+}
+
 type TrendPoint struct {
 	SnapshotDate string     `json:"snapshot_date"`
 	CapturedAt   *time.Time `json:"captured_at,omitempty"`
 	MetricValue  *float64   `json:"metric_value,omitempty"`
 	Missing      bool       `json:"missing"`
+}
+
+type TrendTopMover struct {
+	RepositoryID   int64    `json:"repository_id"`
+	RepositoryName string   `json:"repository_name"`
+	ImageID        *int64   `json:"image_id,omitempty"`
+	ImageName      string   `json:"image_name,omitempty"`
+	StartValue     float64  `json:"start_value"`
+	EndValue       float64  `json:"end_value"`
+	DeltaValue     float64  `json:"delta_value"`
+	DeltaPercent   *float64 `json:"delta_percent,omitempty"`
+}
+
+type CleanupSimulationRequest struct {
+	NexusInstanceID int64  `json:"nexus_instance_id,omitempty"`
+	RepositoryName  string `json:"repository_name,omitempty"`
+	PolicyYAML      string `json:"policy_yaml"`
+	Limit           int32  `json:"limit,omitempty"`
+}
+
+type CleanupSimulationResult struct {
+	PolicyName                string                     `json:"policy_name"`
+	EvaluatedTagCount         int64                      `json:"evaluated_tag_count"`
+	CandidateTagCount         int64                      `json:"candidate_tag_count"`
+	ProtectedTagCount         int64                      `json:"protected_tag_count"`
+	WarningCount              int64                      `json:"warning_count"`
+	EstimatedReclaimableBytes int64                      `json:"estimated_reclaimable_bytes"`
+	Candidates                []CleanupSimulationTag     `json:"candidates"`
+	Protected                 []CleanupSimulationTag     `json:"protected"`
+	Warnings                  []CleanupSimulationWarning `json:"warnings"`
+}
+
+type CleanupSimulationTag struct {
+	TagID                     int64      `json:"tag_id"`
+	ImageID                   int64      `json:"image_id"`
+	RepositoryID              int64      `json:"repository_id"`
+	NexusInstanceID           int64      `json:"nexus_instance_id"`
+	RepositoryName            string     `json:"repository_name"`
+	ImageName                 string     `json:"image_name"`
+	Tag                       string     `json:"tag"`
+	PatternName               string     `json:"pattern_name"`
+	RuleName                  string     `json:"rule_name,omitempty"`
+	Reason                    string     `json:"reason,omitempty"`
+	DockerLogicalBytes        int64      `json:"docker_logical_bytes"`
+	EstimatedReclaimableBytes int64      `json:"estimated_reclaimable_bytes"`
+	FirstSeenAt               time.Time  `json:"first_seen_at"`
+	LastSeenAt                time.Time  `json:"last_seen_at"`
+	LastDownloadedAt          *time.Time `json:"last_downloaded_at,omitempty"`
+}
+
+type CleanupSimulationWarning struct {
+	Tag  CleanupSimulationTag `json:"tag"`
+	Code string               `json:"code"`
+}
+
+type CleanupExecutionRequest struct {
+	NexusInstanceID int64  `json:"nexus_instance_id"`
+	RepositoryName  string `json:"repository_name,omitempty"`
+	PolicyYAML      string `json:"policy_yaml"`
+	ApprovalText    string `json:"approval_text"`
+	Limit           int32  `json:"limit,omitempty"`
+	RequestedBy     string `json:"-"`
+}
+
+type CleanupExecution struct {
+	ID                          int64      `json:"id"`
+	NexusInstanceID             int64      `json:"nexus_instance_id"`
+	RepositoryName              string     `json:"repository_name,omitempty"`
+	PolicyName                  string     `json:"policy_name"`
+	Status                      string     `json:"status"`
+	RequestedBy                 string     `json:"requested_by"`
+	ApprovedBy                  string     `json:"approved_by,omitempty"`
+	DestructiveEnabled          bool       `json:"destructive_enabled"`
+	SimulationSummary           any        `json:"simulation_summary"`
+	AuditLog                    any        `json:"audit_log"`
+	PostDeleteVerificationRunID *int64     `json:"post_delete_verification_run_id,omitempty"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	ApprovedAt                  *time.Time `json:"approved_at,omitempty"`
+	FinishedAt                  *time.Time `json:"finished_at,omitempty"`
 }
 
 type RepositoryAnalytics struct {
@@ -268,6 +362,21 @@ type TagAnalytics struct {
 	FirstSeenAt               time.Time  `json:"first_seen_at"`
 	LastSeenAt                time.Time  `json:"last_seen_at"`
 	LastDownloadedAt          *time.Time `json:"last_downloaded_at,omitempty"`
+}
+
+type PackageFormatRepository struct {
+	RepositoryID    int64      `json:"repository_id"`
+	NexusInstanceID int64      `json:"nexus_instance_id"`
+	NexusName       string     `json:"nexus_name"`
+	RepositoryName  string     `json:"repository_name"`
+	Format          string     `json:"format"`
+	Type            string     `json:"type"`
+	SupportStatus   string     `json:"support_status"`
+	SupportReason   string     `json:"support_reason"`
+	AssetCount      int64      `json:"asset_count"`
+	AssetBytes      int64      `json:"asset_bytes"`
+	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
+	LastAssetSeenAt *time.Time `json:"last_asset_seen_at,omitempty"`
 }
 
 type TagPattern struct {
@@ -477,7 +586,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/analytics/repositories", s.listRepositoryAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics/images", s.listImageAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics/tags", s.listTagAnalytics)
+	s.mux.HandleFunc("GET /api/v1/packages/repositories", s.listPackageFormatRepositories)
 	s.mux.HandleFunc("GET /api/v1/analytics/trends", s.listTrendSeries)
+	s.mux.HandleFunc("GET /api/v1/analytics/trends/top-movers", s.listTrendTopMovers)
+	s.mux.HandleFunc("POST /api/v1/cleanup/simulations", s.simulateCleanupPolicy)
+	s.mux.HandleFunc("POST /api/v1/cleanup/executions", s.requestCleanupExecution)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns", s.listTagPatternAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns/growth", s.listTagPatternGrowth)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns/examples", s.listTagPatternExamples)
@@ -846,6 +959,13 @@ func (s *Server) listTagAnalytics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) listPackageFormatRepositories(w http.ResponseWriter, r *http.Request) {
+	s.listAnalytics(w, r, func(ctx context.Context, req AnalyticsListRequest) (any, error) {
+		rows, err := s.indexing.ListPackageFormatRepositories(ctx, req)
+		return map[string]any{"repositories": rows}, err
+	})
+}
+
 func (s *Server) listTrendSeries(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuthenticated(w, r); !ok {
 		return
@@ -870,6 +990,89 @@ func (s *Server) listTrendSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"points": rows})
+}
+
+func (s *Server) listTrendTopMovers(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuthenticated(w, r); !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	req := TrendTopMoversRequest{
+		NexusInstanceID: queryInt64(r, "nexus_instance_id"),
+		RepositoryID:    queryInt64(r, "repository_id"),
+		ImageID:         queryInt64(r, "image_id"),
+		MetricName:      r.URL.Query().Get("metric_name"),
+		PatternName:     r.URL.Query().Get("pattern_name"),
+		StartDate:       r.URL.Query().Get("start_date"),
+		EndDate:         r.URL.Query().Get("end_date"),
+		Limit:           int32(queryInt64(r, "limit")),
+	}
+	rows, err := s.indexing.ListTrendTopMovers(r.Context(), req)
+	if err != nil {
+		s.logger.Error("list trend top movers failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "trend_top_movers_list_failed", "trend top movers could not be loaded", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"movers": rows})
+}
+
+func (s *Server) simulateCleanupPolicy(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuthenticated(w, r); !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	var req CleanupSimulationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_request", "invalid JSON request body", requestIDFromContext(r.Context()), false)
+		return
+	}
+	result, err := s.indexing.SimulateCleanupPolicy(r.Context(), req)
+	if err != nil {
+		var invalid invalidRequestError
+		if errors.As(err, &invalid) && invalid.InvalidRequest() {
+			writeProblem(w, http.StatusBadRequest, "cleanup_policy_invalid", err.Error(), requestIDFromContext(r.Context()), false)
+			return
+		}
+		s.logger.Error("simulate cleanup policy failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "cleanup_simulation_failed", "cleanup simulation could not be run", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) requestCleanupExecution(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdminUser(w, r)
+	if !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	var req CleanupExecutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_request", "invalid JSON request body", requestIDFromContext(r.Context()), false)
+		return
+	}
+	req.RequestedBy = user.Username
+	execution, err := s.indexing.RequestCleanupExecution(r.Context(), req)
+	if err != nil {
+		var invalid invalidRequestError
+		if errors.As(err, &invalid) && invalid.InvalidRequest() {
+			writeProblem(w, http.StatusBadRequest, "cleanup_execution_invalid", err.Error(), requestIDFromContext(r.Context()), false)
+			return
+		}
+		s.logger.Error("request cleanup execution failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "cleanup_execution_failed", "cleanup execution could not be requested", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, execution)
 }
 
 func (s *Server) listTagPatternAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -1203,6 +1406,11 @@ func (errAuthNotConfigured) Error() string { return "auth not configured" }
 type operationLockConflictError interface {
 	error
 	OperationLockConflict() (int64, string)
+}
+
+type invalidRequestError interface {
+	error
+	InvalidRequest() bool
 }
 
 func writeUnauthorized(w http.ResponseWriter, requestID string) {

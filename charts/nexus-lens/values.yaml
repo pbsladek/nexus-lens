@@ -9,6 +9,20 @@ api:
 worker:
   replicas: 1
 
+nexus:
+  credentials:
+    existingSecret: ""
+    usernameKey: username
+    passwordKey: password
+
+cleanup:
+  destructiveExecution:
+    enabled: false
+    deleteRPS: 0.5
+    maintenanceWindowUTC:
+      start: ""
+      end: ""
+
 postgres:
   existingSecret: nexus-lens-postgres
   hostKey: host

@@ -228,6 +228,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/packages/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listPackageFormatRepositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/trends/top-movers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTrendTopMovers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cleanup/simulations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["simulateCleanupPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cleanup/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["requestCleanupExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/tag-patterns": {
         parameters: {
             query?: never;
@@ -553,6 +617,128 @@ export interface components {
             /** Format: double */
             metric_value?: number;
             missing: boolean;
+        };
+        TrendTopMover: {
+            /** Format: int64 */
+            repository_id: number;
+            repository_name: string;
+            /** Format: int64 */
+            image_id?: number;
+            image_name?: string;
+            /** Format: double */
+            start_value: number;
+            /** Format: double */
+            end_value: number;
+            /** Format: double */
+            delta_value: number;
+            /** Format: double */
+            delta_percent?: number;
+        };
+        CleanupSimulationRequest: {
+            /** Format: int64 */
+            nexus_instance_id?: number;
+            repository_name?: string;
+            policy_yaml: string;
+            /** Format: int32 */
+            limit?: number;
+        };
+        CleanupSimulationResult: {
+            policy_name: string;
+            /** Format: int64 */
+            evaluated_tag_count: number;
+            /** Format: int64 */
+            candidate_tag_count: number;
+            /** Format: int64 */
+            protected_tag_count: number;
+            /** Format: int64 */
+            warning_count: number;
+            /** Format: int64 */
+            estimated_reclaimable_bytes: number;
+            candidates: components["schemas"]["CleanupSimulationTag"][];
+            protected: components["schemas"]["CleanupSimulationTag"][];
+            warnings: components["schemas"]["CleanupSimulationWarning"][];
+        };
+        CleanupSimulationTag: {
+            /** Format: int64 */
+            tag_id: number;
+            /** Format: int64 */
+            image_id: number;
+            /** Format: int64 */
+            repository_id: number;
+            /** Format: int64 */
+            nexus_instance_id: number;
+            repository_name: string;
+            image_name: string;
+            tag: string;
+            pattern_name: string;
+            rule_name?: string;
+            reason?: string;
+            /** Format: int64 */
+            docker_logical_bytes: number;
+            /** Format: int64 */
+            estimated_reclaimable_bytes: number;
+            /** Format: date-time */
+            first_seen_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** Format: date-time */
+            last_downloaded_at?: string;
+        };
+        CleanupSimulationWarning: {
+            tag: components["schemas"]["CleanupSimulationTag"];
+            code: string;
+        };
+        CleanupExecutionRequest: {
+            /** Format: int64 */
+            nexus_instance_id: number;
+            repository_name?: string;
+            policy_yaml: string;
+            approval_text: string;
+            /** Format: int32 */
+            limit?: number;
+        };
+        CleanupExecution: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            nexus_instance_id: number;
+            repository_name?: string;
+            policy_name: string;
+            status: string;
+            requested_by: string;
+            approved_by?: string;
+            destructive_enabled: boolean;
+            simulation_summary: unknown;
+            audit_log: unknown;
+            /** Format: int64 */
+            post_delete_verification_run_id?: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            approved_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+        };
+        PackageFormatRepository: {
+            /** Format: int64 */
+            repository_id: number;
+            /** Format: int64 */
+            nexus_instance_id: number;
+            nexus_name: string;
+            repository_name: string;
+            format: string;
+            type: string;
+            /** @enum {string} */
+            support_status: "indexed" | "discover_only" | "skipped" | "unsupported";
+            support_reason: string;
+            /** Format: int64 */
+            asset_count: number;
+            /** Format: int64 */
+            asset_bytes: number;
+            /** Format: date-time */
+            last_seen_at?: string;
+            /** Format: date-time */
+            last_asset_seen_at?: string;
         };
         RepositoryAnalytics: {
             /** Format: int64 */
@@ -1416,6 +1602,174 @@ export interface operations {
             };
             /** @description Authentication required or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listPackageFormatRepositories: {
+        parameters: {
+            query?: {
+                nexus_instance_id?: components["parameters"]["NexusInstanceID"];
+                search?: components["parameters"]["Search"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Repository format support and discover-only package repository status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        repositories: components["schemas"]["PackageFormatRepository"][];
+                    };
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listTrendTopMovers: {
+        parameters: {
+            query?: {
+                nexus_instance_id?: components["parameters"]["NexusInstanceID"];
+                repository_id?: components["parameters"]["RepositoryID"];
+                image_id?: components["parameters"]["ImageID"];
+                metric_name?: components["parameters"]["MetricName"];
+                pattern_name?: components["parameters"]["PatternName"];
+                start_date?: components["parameters"]["StartDate"];
+                end_date?: components["parameters"]["EndDate"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Largest scoped metric deltas between two snapshot dates. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        movers: components["schemas"]["TrendTopMover"][];
+                    };
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    simulateCleanupPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CleanupSimulationRequest"];
+            };
+        };
+        responses: {
+            /** @description Read-only cleanup simulation result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanupSimulationResult"];
+                };
+            };
+            /** @description Invalid cleanup policy YAML. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    requestCleanupExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CleanupExecutionRequest"];
+            };
+        };
+        responses: {
+            /** @description Cleanup execution request audited. Destructive execution may be blocked by read-only mode. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanupExecution"];
+                };
+            };
+            /** @description Invalid cleanup execution request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

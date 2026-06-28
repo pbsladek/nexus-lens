@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -58,7 +59,15 @@ func main() {
 		opts = append(opts,
 			api.WithAuthenticator(authAdapter.Authenticate),
 			api.WithSessionManager(authAdapter),
-			api.WithIndexingService(apiIndexingAdapter{service: indexingService}),
+			api.WithIndexingService(apiIndexingAdapter{
+				service:                    indexingService,
+				destructiveCleanupEnabled:  envBool("NEXUS_LENS_ENABLE_DESTRUCTIVE_CLEANUP", false),
+				nexusUsername:              os.Getenv("NEXUS_LENS_NEXUS_USERNAME"),
+				nexusPassword:              envOrFile("NEXUS_LENS_NEXUS_PASSWORD", "NEXUS_LENS_NEXUS_PASSWORD_FILE"),
+				cleanupDeleteRPS:           envFloat("NEXUS_LENS_CLEANUP_DELETE_RPS", 0.5),
+				cleanupMaintenanceStartUTC: os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_START_UTC"),
+				cleanupMaintenanceEndUTC:   os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_END_UTC"),
+			}),
 		)
 	} else {
 		logger.Warn("postgres not configured; readiness will not check database")
@@ -90,6 +99,33 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envOrFile(envKey, fileKey string) string {
+	if value := os.Getenv(envKey); value != "" {
+		return value
+	}
+	path := os.Getenv(fileKey)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 type apiAuthAdapter struct {
@@ -133,7 +169,13 @@ func apiUser(user auth.User) api.AuthenticatedUser {
 }
 
 type apiIndexingAdapter struct {
-	service *indexing.Service
+	service                    *indexing.Service
+	destructiveCleanupEnabled  bool
+	nexusUsername              string
+	nexusPassword              string
+	cleanupDeleteRPS           float64
+	cleanupMaintenanceStartUTC string
+	cleanupMaintenanceEndUTC   string
 }
 
 func (a apiIndexingAdapter) StartIndexRun(ctx context.Context, req api.StartIndexRunRequest) (api.IndexRun, error) {
@@ -352,6 +394,22 @@ func (a apiIndexingAdapter) ListTagAnalytics(ctx context.Context, req api.Analyt
 	return out, nil
 }
 
+func (a apiIndexingAdapter) ListPackageFormatRepositories(ctx context.Context, req api.AnalyticsListRequest) ([]api.PackageFormatRepository, error) {
+	rows, err := a.service.ListPackageFormatRepositories(ctx, indexing.AnalyticsListRequest{
+		NexusInstanceID: req.NexusInstanceID,
+		Search:          req.Search,
+		Limit:           req.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.PackageFormatRepository, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, apiPackageFormatRepository(row))
+	}
+	return out, nil
+}
+
 func (a apiIndexingAdapter) ListTrendSeries(ctx context.Context, req api.TrendSeriesRequest) ([]api.TrendPoint, error) {
 	rows, err := a.service.ListTrendSeries(ctx, indexing.TrendSeriesRequest{
 		NexusInstanceID: req.NexusInstanceID,
@@ -370,6 +428,61 @@ func (a apiIndexingAdapter) ListTrendSeries(ctx context.Context, req api.TrendSe
 		out = append(out, apiTrendPoint(row))
 	}
 	return out, nil
+}
+
+func (a apiIndexingAdapter) ListTrendTopMovers(ctx context.Context, req api.TrendTopMoversRequest) ([]api.TrendTopMover, error) {
+	rows, err := a.service.ListTrendTopMovers(ctx, indexing.TrendTopMoversRequest{
+		NexusInstanceID: req.NexusInstanceID,
+		RepositoryID:    req.RepositoryID,
+		ImageID:         req.ImageID,
+		MetricName:      req.MetricName,
+		PatternName:     req.PatternName,
+		StartDate:       req.StartDate,
+		EndDate:         req.EndDate,
+		Limit:           req.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.TrendTopMover, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, apiTrendTopMover(row))
+	}
+	return out, nil
+}
+
+func (a apiIndexingAdapter) SimulateCleanupPolicy(ctx context.Context, req api.CleanupSimulationRequest) (api.CleanupSimulationResult, error) {
+	result, err := a.service.SimulateCleanupPolicy(ctx, indexing.CleanupSimulationRequest{
+		NexusInstanceID: req.NexusInstanceID,
+		RepositoryName:  req.RepositoryName,
+		PolicyYAML:      req.PolicyYAML,
+		Limit:           req.Limit,
+	})
+	if err != nil {
+		return api.CleanupSimulationResult{}, err
+	}
+	return apiCleanupSimulationResult(result), nil
+}
+
+func (a apiIndexingAdapter) RequestCleanupExecution(ctx context.Context, req api.CleanupExecutionRequest) (api.CleanupExecution, error) {
+	row, err := a.service.RequestCleanupExecution(ctx, indexing.CleanupExecutionRequest{
+		NexusInstanceID:        req.NexusInstanceID,
+		RepositoryName:         req.RepositoryName,
+		PolicyYAML:             req.PolicyYAML,
+		ApprovalText:           req.ApprovalText,
+		RequestedBy:            req.RequestedBy,
+		DestructiveEnabled:     a.destructiveCleanupEnabled,
+		NexusUsername:          a.nexusUsername,
+		NexusPassword:          a.nexusPassword,
+		DeleteRPS:              a.cleanupDeleteRPS,
+		MaintenanceWindowStart: a.cleanupMaintenanceStartUTC,
+		MaintenanceWindowEnd:   a.cleanupMaintenanceEndUTC,
+		Limit:                  req.Limit,
+	})
+	if err != nil {
+		return api.CleanupExecution{}, err
+	}
+	return apiCleanupExecution(row), nil
 }
 
 func (a apiIndexingAdapter) ListTagPatterns(ctx context.Context) ([]api.TagPattern, error) {
@@ -684,6 +797,26 @@ func apiTagAnalytics(row db.ListTagAnalyticsRow) api.TagAnalytics {
 	return out
 }
 
+func apiPackageFormatRepository(row db.ListPackageFormatRepositoriesRow) api.PackageFormatRepository {
+	out := api.PackageFormatRepository{
+		RepositoryID:    row.RepositoryID,
+		NexusInstanceID: row.NexusInstanceID,
+		NexusName:       row.NexusName,
+		RepositoryName:  row.RepositoryName,
+		Format:          row.Format,
+		Type:            row.Type,
+		SupportStatus:   row.SupportStatus,
+		SupportReason:   row.SupportReason,
+		AssetCount:      row.AssetCount,
+		AssetBytes:      row.AssetBytes,
+	}
+	if row.LastSeenAt.Valid {
+		out.LastSeenAt = &row.LastSeenAt.Time
+	}
+	out.LastAssetSeenAt = timePtrFromAny(row.LastAssetSeenAt)
+	return out
+}
+
 func apiTrendPoint(row db.ListTrendSeriesRow) api.TrendPoint {
 	out := api.TrendPoint{Missing: row.Missing}
 	if row.SnapshotDate.Valid {
@@ -696,6 +829,105 @@ func apiTrendPoint(row db.ListTrendSeriesRow) api.TrendPoint {
 		if value, err := row.MetricValue.Float64Value(); err == nil && value.Valid {
 			out.MetricValue = &value.Float64
 		}
+	}
+	return out
+}
+
+func apiTrendTopMover(row db.ListTrendTopMoversRow) api.TrendTopMover {
+	out := api.TrendTopMover{
+		RepositoryID:   row.RepositoryID.Int64,
+		RepositoryName: row.RepositoryName.String,
+		StartValue:     numericFloat(row.StartValue),
+		EndValue:       numericFloat(row.EndValue),
+		DeltaValue:     numericFloat(row.DeltaValue),
+		DeltaPercent:   numericFloatPtr(row.DeltaPercent),
+	}
+	if row.ImageID.Valid {
+		imageID := row.ImageID.Int64
+		out.ImageID = &imageID
+	}
+	if row.ImageName.Valid {
+		out.ImageName = row.ImageName.String
+	}
+	return out
+}
+
+func apiCleanupSimulationResult(result indexing.CleanupSimulationResult) api.CleanupSimulationResult {
+	out := api.CleanupSimulationResult{
+		PolicyName:                result.PolicyName,
+		EvaluatedTagCount:         result.EvaluatedTagCount,
+		CandidateTagCount:         result.CandidateTagCount,
+		ProtectedTagCount:         result.ProtectedTagCount,
+		WarningCount:              result.WarningCount,
+		EstimatedReclaimableBytes: result.EstimatedReclaimableBytes,
+		Candidates:                make([]api.CleanupSimulationTag, 0, len(result.Candidates)),
+		Protected:                 make([]api.CleanupSimulationTag, 0, len(result.Protected)),
+		Warnings:                  make([]api.CleanupSimulationWarning, 0, len(result.Warnings)),
+	}
+	for _, tag := range result.Candidates {
+		out.Candidates = append(out.Candidates, apiCleanupSimulationTag(tag))
+	}
+	for _, tag := range result.Protected {
+		out.Protected = append(out.Protected, apiCleanupSimulationTag(tag))
+	}
+	for _, warning := range result.Warnings {
+		out.Warnings = append(out.Warnings, api.CleanupSimulationWarning{
+			Tag:  apiCleanupSimulationTag(warning.Tag),
+			Code: warning.Code,
+		})
+	}
+	return out
+}
+
+func apiCleanupSimulationTag(tag indexing.CleanupSimulationTag) api.CleanupSimulationTag {
+	return api.CleanupSimulationTag{
+		TagID:                     tag.TagID,
+		ImageID:                   tag.ImageID,
+		RepositoryID:              tag.RepositoryID,
+		NexusInstanceID:           tag.NexusInstanceID,
+		RepositoryName:            tag.RepositoryName,
+		ImageName:                 tag.ImageName,
+		Tag:                       tag.Tag,
+		PatternName:               tag.PatternName,
+		RuleName:                  tag.RuleName,
+		Reason:                    tag.Reason,
+		DockerLogicalBytes:        tag.DockerLogicalBytes,
+		EstimatedReclaimableBytes: tag.EstimatedReclaimableBytes,
+		FirstSeenAt:               tag.FirstSeenAt,
+		LastSeenAt:                tag.LastSeenAt,
+		LastDownloadedAt:          tag.LastDownloadedAt,
+	}
+}
+
+func apiCleanupExecution(row db.CleanupExecution) api.CleanupExecution {
+	out := api.CleanupExecution{
+		ID:                 row.ID,
+		NexusInstanceID:    row.NexusInstanceID,
+		PolicyName:         row.PolicyName,
+		Status:             row.Status,
+		RequestedBy:        row.RequestedBy,
+		DestructiveEnabled: row.DestructiveEnabled,
+		SimulationSummary:  jsonValue(row.SimulationSummary),
+		AuditLog:           jsonValue(row.AuditLog),
+	}
+	if row.RepositoryName.Valid {
+		out.RepositoryName = row.RepositoryName.String
+	}
+	if row.ApprovedBy.Valid {
+		out.ApprovedBy = row.ApprovedBy.String
+	}
+	if row.PostDeleteVerificationRunID.Valid {
+		id := row.PostDeleteVerificationRunID.Int64
+		out.PostDeleteVerificationRunID = &id
+	}
+	if row.CreatedAt.Valid {
+		out.CreatedAt = row.CreatedAt.Time
+	}
+	if row.ApprovedAt.Valid {
+		out.ApprovedAt = &row.ApprovedAt.Time
+	}
+	if row.FinishedAt.Valid {
+		out.FinishedAt = &row.FinishedAt.Time
 	}
 	return out
 }
@@ -828,6 +1060,24 @@ func apiIndexingControl(control db.NexusIndexingControl) api.IndexingControl {
 	out.RegistryManifestRPS = numericFloatPtr(control.RegistryManifestRps)
 	out.DefaultRPS = numericFloatPtr(control.DefaultRps)
 	return out
+}
+
+func numericFloat(value pgtype.Numeric) float64 {
+	if converted := numericFloatPtr(value); converted != nil {
+		return *converted
+	}
+	return 0
+}
+
+func jsonValue(data []byte) any {
+	if len(data) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil
+	}
+	return value
 }
 
 func numericFloatPtr(value pgtype.Numeric) *float64 {

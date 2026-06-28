@@ -11,6 +11,7 @@ import {
   listIndexRuns,
   listIndexingSchedules,
   listNexusInstances,
+  listPackageFormatRepositories,
   listRepositoryAnalytics,
   listTagAnalytics,
   listTagPatternAnalytics,
@@ -18,12 +19,16 @@ import {
   listTagPatternGrowth,
   listTagPatternSuggestions,
   listTagPatterns,
+  listTrendSeries,
+  listTrendTopMovers,
   listVerificationFindings,
   login,
   logout,
   pauseNexusIndexing,
   resumeNexusIndexing,
+  requestCleanupExecution,
   retryIndexTask,
+  simulateCleanupPolicy,
   startTagReclassification,
   startIndexRun,
   updateNexusRateLimits,
@@ -31,12 +36,16 @@ import {
   upsertTagPattern,
   type AnalyticsOverview,
   type AppUser,
+  type CleanupSimulationResult,
+  type CleanupSimulationTag,
+  type CleanupExecution,
   type ImageAnalytics,
   type IndexingSchedule,
   type IndexingControl,
   type IndexRun,
   type IndexTask,
   type NexusInstance,
+  type PackageFormatRepository,
   type RateLimitSettings,
   type RepositoryAnalytics,
   type StartIndexRunRequest,
@@ -46,12 +55,29 @@ import {
   type TagPatternExample,
   type TagPatternGrowth,
   type TagPatternSuggestion,
+  type TrendPoint,
+  type TrendTopMover,
   type UpsertIndexingScheduleRequest,
   type VerificationFinding,
 } from "./api/client";
 import "./styles.css";
 
 type ScanType = StartIndexRunRequest["scan_type"];
+
+const defaultCleanupPolicyYAML = `name: ci-feature-cleanup
+protected:
+  patterns: [semver, channel]
+  tags: [latest, stable]
+candidate_rules:
+  - name: old feature branches
+    patterns: [feature_branch, pull_request]
+    older_than_days: 30
+    never_downloaded: true
+  - name: stale generated tags
+    patterns: [opaque_generated, short_sha, long_sha]
+    older_than_days: 30
+    never_downloaded: true
+`;
 
 function App() {
   const [apiStatus, setAPIStatus] = useState("checking");
@@ -92,6 +118,8 @@ function App() {
   const [repositoryRows, setRepositoryRows] = useState<RepositoryAnalytics[]>([]);
   const [imageRows, setImageRows] = useState<ImageAnalytics[]>([]);
   const [tagRows, setTagRows] = useState<TagAnalytics[]>([]);
+  const [packageRows, setPackageRows] = useState<PackageFormatRepository[]>([]);
+  const [packageStatus, setPackageStatus] = useState("not loaded");
   const [analyticsNexusID, setAnalyticsNexusID] = useState(0);
   const [analyticsRepository, setAnalyticsRepository] = useState("");
   const [analyticsSearch, setAnalyticsSearch] = useState("");
@@ -110,9 +138,26 @@ function App() {
   const [patternRegex, setPatternRegex] = useState("^custom[-/_].+$");
   const [patternPriority, setPatternPriority] = useState(500);
   const [patternEnabled, setPatternEnabled] = useState(true);
+  const [trendStatus, setTrendStatus] = useState("not loaded");
+  const [trendMetricName, setTrendMetricName] = useState("docker_logical_bytes");
+  const [trendPatternName, setTrendPatternName] = useState("");
+  const [trendStartDate, setTrendStartDate] = useState(dateInputValue(30));
+  const [trendEndDate, setTrendEndDate] = useState(dateInputValue(0));
+  const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
+  const [trendMovers, setTrendMovers] = useState<TrendTopMover[]>([]);
+  const [cleanupStatus, setCleanupStatus] = useState("not run");
+  const [cleanupPolicyYAML, setCleanupPolicyYAML] = useState(defaultCleanupPolicyYAML);
+  const [cleanupResult, setCleanupResult] = useState<CleanupSimulationResult | null>(null);
+  const [cleanupApprovalText, setCleanupApprovalText] = useState("");
+  const [cleanupExecution, setCleanupExecution] = useState<CleanupExecution | null>(null);
 
   const isAdmin = user?.role === "admin";
   const isExclusiveRun = scanType === "bounded_reindex" || scanType === "full_reconcile";
+  const trendUsesPattern = trendMetricName.startsWith("tag_pattern_");
+  const trendMaxValue = Math.max(
+    1,
+    ...trendPoints.map((point) => (point.missing ? 0 : point.metric_value ?? 0)),
+  );
 
   useEffect(() => {
     let active = true;
@@ -155,23 +200,33 @@ function App() {
       setRepositoryRows([]);
       setImageRows([]);
       setTagRows([]);
+      setPackageRows([]);
       setPatterns([]);
       setPatternRows([]);
       setPatternGrowth([]);
       setPatternExamples([]);
       setPatternSuggestions([]);
+      setTrendPoints([]);
+      setTrendMovers([]);
+      setCleanupResult(null);
+      setCleanupExecution(null);
       setRunsStatus("signed out");
       setFindingsStatus("signed out");
       setSettingsStatus("signed out");
       setAnalyticsStatus("signed out");
+      setPackageStatus("signed out");
       setPatternStatus("signed out");
+      setTrendStatus("signed out");
+      setCleanupStatus("signed out");
       return;
     }
     void refreshRuns();
     void refreshFindings();
     void refreshSettings();
     void refreshAnalytics();
+    void refreshPackageFormats();
     void refreshPatterns();
+    void refreshTrends();
   }, [user]);
 
   async function refreshRuns() {
@@ -303,6 +358,166 @@ function App() {
       setImageRows([]);
       setTagRows([]);
       setAnalyticsStatus("failed");
+    }
+  }
+
+  async function refreshPackageFormats() {
+    setPackageStatus("loading");
+    try {
+      const response = await listPackageFormatRepositories({
+        nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        search: analyticsSearch.trim() || undefined,
+        limit: 100,
+      });
+      setPackageRows(response.repositories ?? []);
+      setPackageStatus("loaded");
+    } catch {
+      setPackageRows([]);
+      setPackageStatus("failed");
+    }
+  }
+
+  async function refreshTrends() {
+    setTrendStatus("loading");
+    try {
+      const options = {
+        nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        metricName: trendMetricName,
+        patternName: trendUsesPattern ? trendPatternName || undefined : undefined,
+        startDate: trendStartDate || undefined,
+        endDate: trendEndDate || undefined,
+        limit: 10,
+      };
+      const [seriesResponse, moversResponse] = await Promise.all([
+        listTrendSeries(options),
+        listTrendTopMovers(options),
+      ]);
+      setTrendPoints(seriesResponse.points ?? []);
+      setTrendMovers(moversResponse.movers ?? []);
+      setTrendStatus("loaded");
+    } catch {
+      setTrendPoints([]);
+      setTrendMovers([]);
+      setTrendStatus("failed");
+    }
+  }
+
+  async function applyTrendMoverFilter(mover: TrendTopMover) {
+    const repositoryName = mover.repository_name;
+    const search = mover.image_name ?? "";
+    setAnalyticsRepository(repositoryName);
+    setAnalyticsSearch(search);
+    setAnalyticsStatus("loading");
+    try {
+      const options = {
+        nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        repositoryName,
+        search: search || undefined,
+        olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
+        neverDownloaded: analyticsNeverDownloaded,
+        limit: 50,
+      };
+      const [overviewResponse, repositoryResponse, imageResponse, tagResponse] = await Promise.all([
+        getAnalyticsOverview(options.nexusInstanceID),
+        listRepositoryAnalytics({
+          nexusInstanceID: options.nexusInstanceID,
+          search: repositoryName,
+          limit: options.limit,
+        }),
+        listImageAnalytics(options),
+        listTagAnalytics(options),
+      ]);
+      setOverview(overviewResponse);
+      setRepositoryRows(repositoryResponse.repositories ?? []);
+      setImageRows(imageResponse.images ?? []);
+      setTagRows(tagResponse.tags ?? []);
+      setAnalyticsStatus("loaded");
+    } catch {
+      setOverview(null);
+      setRepositoryRows([]);
+      setImageRows([]);
+      setTagRows([]);
+      setAnalyticsStatus("failed");
+    }
+  }
+
+  async function handleSimulateCleanup(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCleanupStatus("running");
+    try {
+      const result = await simulateCleanupPolicy({
+        nexus_instance_id: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        repository_name: analyticsRepository.trim() || undefined,
+        policy_yaml: cleanupPolicyYAML,
+        limit: 1000,
+      });
+      setCleanupResult(result);
+      setCleanupStatus("loaded");
+    } catch (error) {
+      setCleanupResult(null);
+      setCleanupStatus(error instanceof Error ? error.message : "simulation failed");
+    }
+  }
+
+  async function applyCleanupTagFilter(tag: CleanupSimulationTag) {
+    setAnalyticsRepository(tag.repository_name);
+    setAnalyticsSearch(`${tag.image_name}:${tag.tag}`);
+    setAnalyticsStatus("loading");
+    try {
+      const options = {
+        nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        repositoryName: tag.repository_name,
+        search: tag.tag,
+        olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
+        neverDownloaded: analyticsNeverDownloaded,
+        limit: 50,
+      };
+      const [overviewResponse, repositoryResponse, imageResponse, tagResponse] = await Promise.all([
+        getAnalyticsOverview(options.nexusInstanceID),
+        listRepositoryAnalytics({
+          nexusInstanceID: options.nexusInstanceID,
+          search: tag.repository_name,
+          limit: options.limit,
+        }),
+        listImageAnalytics({
+          ...options,
+          search: tag.image_name,
+        }),
+        listTagAnalytics(options),
+      ]);
+      setOverview(overviewResponse);
+      setRepositoryRows(repositoryResponse.repositories ?? []);
+      setImageRows(imageResponse.images ?? []);
+      setTagRows(tagResponse.tags ?? []);
+      setAnalyticsStatus("loaded");
+    } catch {
+      setOverview(null);
+      setRepositoryRows([]);
+      setImageRows([]);
+      setTagRows([]);
+      setAnalyticsStatus("failed");
+    }
+  }
+
+  async function handleRequestCleanupExecution() {
+    if (analyticsNexusID <= 0) {
+      setCleanupStatus("Nexus ID is required for cleanup execution.");
+      return;
+    }
+    setCleanupStatus("requesting execution");
+    try {
+      const execution = await requestCleanupExecution({
+        nexus_instance_id: analyticsNexusID,
+        repository_name: analyticsRepository.trim() || undefined,
+        policy_yaml: cleanupPolicyYAML,
+        approval_text: cleanupApprovalText,
+        limit: 1000,
+      });
+      setCleanupExecution(execution);
+      setCleanupStatus(`execution ${execution.status}`);
+    } catch (error) {
+      setCleanupExecution(null);
+      setCleanupStatus(error instanceof Error ? error.message : "execution request failed");
     }
   }
 
@@ -619,6 +834,174 @@ function App() {
       <section className="panel stack">
         <div className="queue-header">
           <div>
+            <h2>Package formats</h2>
+            <p>{packageStatus}</p>
+          </div>
+          <button type="button" disabled={!user} onClick={refreshPackageFormats}>
+            Refresh
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Repository</th>
+                <th>Format</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Reason</th>
+                <th>Assets</th>
+                <th>Bytes</th>
+                <th>Last seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {packageRows.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>No repository formats loaded.</td>
+                </tr>
+              ) : (
+                packageRows.map((repository) => (
+                  <tr key={repository.repository_id}>
+                    <td>{repository.repository_name}</td>
+                    <td>{repository.format}</td>
+                    <td>{repository.type}</td>
+                    <td>{repository.support_status}</td>
+                    <td>{repository.support_reason}</td>
+                    <td>{repository.asset_count}</td>
+                    <td>{formatBytes(repository.asset_bytes)}</td>
+                    <td>{formatDate(repository.last_seen_at)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="panel stack">
+        <div className="queue-header trend-header">
+          <div>
+            <h2>Trends</h2>
+            <p>{trendStatus}</p>
+          </div>
+          <label>
+            Metric
+            <select value={trendMetricName} onChange={(event) => setTrendMetricName(event.target.value)}>
+              <option value="docker_logical_bytes">Docker logical bytes</option>
+              <option value="estimated_reclaimable_bytes">Estimated reclaimable bytes</option>
+              <option value="nexus_asset_bytes">Nexus asset bytes</option>
+              <option value="docker_unique_layer_bytes">Unique layer bytes</option>
+              <option value="active_tag_count">Active tags</option>
+              <option value="new_tag_count_7d">New tags in 7d</option>
+              <option value="old_tag_count_30d">Old tags over 30d</option>
+              <option value="never_downloaded_count">Never downloaded tags</option>
+              <option value="tag_pattern_count">Pattern tag count</option>
+              <option value="tag_pattern_logical_bytes">Pattern logical bytes</option>
+              <option value="tag_pattern_reclaimable_bytes">Pattern reclaimable bytes</option>
+            </select>
+          </label>
+          <button type="button" disabled={!user} onClick={refreshTrends}>
+            Refresh
+          </button>
+        </div>
+        <div className="trend-controls">
+          <label>
+            Start
+            <input
+              type="date"
+              value={trendStartDate}
+              onChange={(event) => setTrendStartDate(event.target.value)}
+            />
+          </label>
+          <label>
+            End
+            <input
+              type="date"
+              value={trendEndDate}
+              onChange={(event) => setTrendEndDate(event.target.value)}
+            />
+          </label>
+          {trendUsesPattern ? (
+            <label>
+              Pattern
+              <select value={trendPatternName} onChange={(event) => setTrendPatternName(event.target.value)}>
+                <option value="">All dimensions</option>
+                {patterns.map((pattern) => (
+                  <option key={pattern.id} value={pattern.name}>
+                    {pattern.display_name}
+                  </option>
+                ))}
+                <option value="unclassified">Unclassified</option>
+              </select>
+            </label>
+          ) : null}
+        </div>
+        <div className="trend-bars" aria-label="Daily trend series">
+          {trendPoints.length === 0 ? (
+            <p className="run-message">No trend points loaded.</p>
+          ) : (
+            trendPoints.map((point) => {
+              const value = point.metric_value ?? 0;
+              const width = point.missing ? 0 : Math.max(4, (value / trendMaxValue) * 100);
+              return (
+                <div
+                  className={point.missing ? "trend-row trend-row-missing" : "trend-row"}
+                  key={point.snapshot_date}
+                >
+                  <span>{point.snapshot_date}</span>
+                  <div className="trend-bar" title={point.missing ? "missing snapshot" : String(value)}>
+                    <div className="trend-bar-fill" style={{ width: `${width}%` }} />
+                  </div>
+                  <strong>{point.missing ? "missing" : formatMetricValue(trendMetricName, value)}</strong>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <h3>Top movers</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Repository</th>
+                <th>Image</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Delta</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {trendMovers.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>No top movers loaded.</td>
+                </tr>
+              ) : (
+                trendMovers.map((mover) => (
+                  <tr key={`${mover.repository_id}/${mover.image_id ?? "repository"}`}>
+                    <td>{mover.repository_name}</td>
+                    <td>{mover.image_name ?? ""}</td>
+                    <td>{formatMetricValue(trendMetricName, mover.start_value)}</td>
+                    <td>{formatMetricValue(trendMetricName, mover.end_value)}</td>
+                    <td>
+                      {formatSignedMetricValue(trendMetricName, mover.delta_value)}
+                      {mover.delta_percent !== undefined ? ` (${mover.delta_percent.toFixed(1)}%)` : ""}
+                    </td>
+                    <td>
+                      <button className="link-button" type="button" onClick={() => applyTrendMoverFilter(mover)}>
+                        Filter explorer
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="panel stack">
+        <div className="queue-header">
+          <div>
             <h2>Artifact explorer</h2>
             <p>Storage values are API-derived estimates from Nexus assets and Docker manifests.</p>
           </div>
@@ -636,6 +1019,7 @@ function App() {
             disabled={!user}
             onClick={() => {
               void refreshAnalytics();
+              void refreshPackageFormats();
               void refreshPatterns();
             }}
           >
@@ -1010,6 +1394,174 @@ function App() {
           <p className="run-message">
             Reclassification uses the selected Nexus ID and repository filter from Artifact explorer.
           </p>
+        </div>
+      </section>
+      <section className="panel stack">
+        <div className="queue-header">
+          <div>
+            <h2>Cleanup simulation</h2>
+            <p>{cleanupStatus}</p>
+          </div>
+          <button type="button" disabled={!user} onClick={() => setCleanupPolicyYAML(defaultCleanupPolicyYAML)}>
+            Reset policy
+          </button>
+        </div>
+        <form className="simulation-form" onSubmit={handleSimulateCleanup}>
+          <label>
+            Policy YAML
+            <textarea value={cleanupPolicyYAML} onChange={(event) => setCleanupPolicyYAML(event.target.value)} />
+          </label>
+          <button type="submit" disabled={!user}>
+            Simulate
+          </button>
+        </form>
+        <div className="metric-grid">
+          <div className="metric">
+            <span>Evaluated tags</span>
+            <strong>{cleanupResult?.evaluated_tag_count ?? 0}</strong>
+          </div>
+          <div className="metric">
+            <span>Candidates</span>
+            <strong>{cleanupResult?.candidate_tag_count ?? 0}</strong>
+          </div>
+          <div className="metric">
+            <span>Protected</span>
+            <strong>{cleanupResult?.protected_tag_count ?? 0}</strong>
+          </div>
+          <div className="metric">
+            <span>Warnings</span>
+            <strong>{cleanupResult?.warning_count ?? 0}</strong>
+          </div>
+          <div className="metric">
+            <span>Estimated reclaimable</span>
+            <strong>{formatBytes(cleanupResult?.estimated_reclaimable_bytes ?? 0)}</strong>
+          </div>
+        </div>
+        <div className="execution-controls">
+          <label>
+            Approval text
+            <input
+              placeholder={cleanupResult?.policy_name ?? "policy name"}
+              value={cleanupApprovalText}
+              onChange={(event) => setCleanupApprovalText(event.target.value)}
+            />
+          </label>
+          <button type="button" disabled={!isAdmin || !cleanupResult} onClick={handleRequestCleanupExecution}>
+            Request execution
+          </button>
+          <p className="run-message">
+            Destructive cleanup is disabled unless the API is started with explicit destructive execution enabled.
+          </p>
+        </div>
+        {cleanupExecution ? (
+          <p className="run-message">
+            Execution {cleanupExecution.id}: {cleanupExecution.status}
+          </p>
+        ) : null}
+        <h3>Candidates</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Repository</th>
+                <th>Image:tag</th>
+                <th>Pattern</th>
+                <th>Rule</th>
+                <th>Reclaimable</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {cleanupResult?.candidates.length ? (
+                cleanupResult.candidates.map((tag) => (
+                  <tr key={tag.tag_id}>
+                    <td>{tag.repository_name}</td>
+                    <td>{tag.image_name}:{tag.tag}</td>
+                    <td>{tag.pattern_name}</td>
+                    <td title={tag.reason}>{tag.rule_name}</td>
+                    <td>{formatBytes(tag.estimated_reclaimable_bytes)}</td>
+                    <td>
+                      <button className="link-button" type="button" onClick={() => applyCleanupTagFilter(tag)}>
+                        Filter explorer
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6}>No cleanup candidates.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <h3>Protected</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Repository</th>
+                <th>Image:tag</th>
+                <th>Pattern</th>
+                <th>Reason</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {cleanupResult?.protected.length ? (
+                cleanupResult.protected.map((tag) => (
+                  <tr key={tag.tag_id}>
+                    <td>{tag.repository_name}</td>
+                    <td>{tag.image_name}:{tag.tag}</td>
+                    <td>{tag.pattern_name}</td>
+                    <td>{tag.reason}</td>
+                    <td>
+                      <button className="link-button" type="button" onClick={() => applyCleanupTagFilter(tag)}>
+                        Filter explorer
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5}>No protected rows.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <h3>Warnings</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Repository</th>
+                <th>Image:tag</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {cleanupResult?.warnings.length ? (
+                cleanupResult.warnings.map((warning) => (
+                  <tr key={`${warning.code}/${warning.tag.tag_id}`}>
+                    <td>{warning.code}</td>
+                    <td>{warning.tag.repository_name}</td>
+                    <td>{warning.tag.image_name}:{warning.tag.tag}</td>
+                    <td>
+                      <button className="link-button" type="button" onClick={() => applyCleanupTagFilter(warning.tag)}>
+                        Filter explorer
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={4}>No simulation warnings.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
       <section className="panel">
@@ -1461,6 +2013,12 @@ function positiveNumberOrUndefined(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function dateInputValue(daysAgo: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
+
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return "0 B";
@@ -1473,6 +2031,18 @@ function formatBytes(value: number): string {
     unit += 1;
   }
   return `${next.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatMetricValue(metricName: string, value: number): string {
+  if (metricName.includes("bytes")) {
+    return formatBytes(value);
+  }
+  return Number.isFinite(value) ? value.toLocaleString() : "0";
+}
+
+function formatSignedMetricValue(metricName: string, value: number): string {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatMetricValue(metricName, value)}`;
 }
 
 function formatDate(value?: string): string {

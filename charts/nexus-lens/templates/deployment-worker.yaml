@@ -45,3 +45,15 @@ spec:
                   key: {{ .Values.postgres.passwordKey }}
             - name: PGSSLMODE
               value: {{ .Values.postgres.sslMode | quote }}
+            {{ if .Values.nexus.credentials.existingSecret }}
+            - name: NEXUS_LENS_NEXUS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nexus.credentials.existingSecret }}
+                  key: {{ .Values.nexus.credentials.usernameKey }}
+            - name: NEXUS_LENS_NEXUS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nexus.credentials.existingSecret }}
+                  key: {{ .Values.nexus.credentials.passwordKey }}
+            {{ end }}

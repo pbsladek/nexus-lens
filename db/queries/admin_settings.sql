@@ -3,6 +3,11 @@ SELECT id, name, base_url, created_at, updated_at
 FROM nexus_instances
 ORDER BY name, id;
 
+-- name: GetNexusInstanceByID :one
+SELECT id, name, base_url, created_at, updated_at
+FROM nexus_instances
+WHERE id = $1;
+
 -- name: ListIndexingSchedules :many
 SELECT
   s.id,

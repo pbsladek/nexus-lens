@@ -262,6 +262,18 @@ func (s *Service) ListTagAnalytics(ctx context.Context, req AnalyticsListRequest
 	return rows, nil
 }
 
+func (s *Service) ListPackageFormatRepositories(ctx context.Context, req AnalyticsListRequest) ([]db.ListPackageFormatRepositoriesRow, error) {
+	rows, err := s.queries.ListPackageFormatRepositories(ctx, db.ListPackageFormatRepositoriesParams{
+		NexusInstanceID: optionalInt8(req.NexusInstanceID),
+		Search:          text(req.Search),
+		LimitCount:      analyticsLimit(req.Limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list package format repositories: %w", err)
+	}
+	return rows, nil
+}
+
 func (s *Service) ListTrendSeries(ctx context.Context, req TrendSeriesRequest) ([]db.ListTrendSeriesRow, error) {
 	if req.MetricName == "" {
 		req.MetricName = "docker_logical_bytes"
@@ -289,6 +301,38 @@ func (s *Service) ListTrendSeries(ctx context.Context, req TrendSeriesRequest) (
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list trend series: %w", err)
+	}
+	return rows, nil
+}
+
+func (s *Service) ListTrendTopMovers(ctx context.Context, req TrendTopMoversRequest) ([]db.ListTrendTopMoversRow, error) {
+	if req.MetricName == "" {
+		req.MetricName = "docker_logical_bytes"
+	}
+	endDate, err := trendDateOrDefault(req.EndDate, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("parse trend top movers end date: %w", err)
+	}
+	startDate, err := trendDateOrDefault(req.StartDate, endDate.AddDate(0, 0, -30))
+	if err != nil {
+		return nil, fmt.Errorf("parse trend top movers start date: %w", err)
+	}
+	dimensions := emptyJSON
+	if req.PatternName != "" {
+		dimensions = jsonBytes(map[string]string{"pattern": req.PatternName})
+	}
+	rows, err := s.queries.ListTrendTopMovers(ctx, db.ListTrendTopMoversParams{
+		NexusInstanceID: req.NexusInstanceID,
+		RepositoryID:    optionalInt8(req.RepositoryID),
+		ImageID:         optionalInt8(req.ImageID),
+		MetricName:      req.MetricName,
+		Dimensions:      dimensions,
+		StartDate:       pgDate(startDate),
+		EndDate:         pgDate(endDate),
+		LimitCount:      analyticsLimit(req.Limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list trend top movers: %w", err)
 	}
 	return rows, nil
 }

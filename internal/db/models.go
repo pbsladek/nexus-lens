@@ -27,6 +27,25 @@ type AppUser struct {
 	DisabledAt   pgtype.Timestamptz
 }
 
+type CleanupExecution struct {
+	ID                          int64
+	NexusInstanceID             int64
+	RepositoryName              pgtype.Text
+	PolicyName                  string
+	PolicyYaml                  string
+	Status                      string
+	RequestedBy                 string
+	ApprovedBy                  pgtype.Text
+	ApprovalText                string
+	DestructiveEnabled          bool
+	SimulationSummary           []byte
+	AuditLog                    []byte
+	PostDeleteVerificationRunID pgtype.Int8
+	CreatedAt                   pgtype.Timestamptz
+	ApprovedAt                  pgtype.Timestamptz
+	FinishedAt                  pgtype.Timestamptz
+}
+
 type ContainerImage struct {
 	ID           int64
 	RepositoryID int64
@@ -84,6 +103,21 @@ type DockerManifestLayer struct {
 	ManifestID int64
 	LayerID    int64
 	Ordinal    int32
+}
+
+type GenericArtifact struct {
+	ID             int64
+	RepositoryID   int64
+	Format         string
+	Namespace      pgtype.Text
+	Name           string
+	Version        pgtype.Text
+	Path           pgtype.Text
+	SizeBytes      pgtype.Int8
+	ChecksumSha256 pgtype.Text
+	FirstSeenAt    pgtype.Timestamptz
+	LastSeenAt     pgtype.Timestamptz
+	Metadata       []byte
 }
 
 type IndexCheckpoint struct {

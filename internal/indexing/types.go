@@ -97,6 +97,86 @@ type TrendSeriesRequest struct {
 	EndDate         string
 }
 
+type TrendTopMoversRequest struct {
+	NexusInstanceID int64
+	RepositoryID    int64
+	ImageID         int64
+	MetricName      string
+	PatternName     string
+	StartDate       string
+	EndDate         string
+	Limit           int32
+}
+
+type CleanupSimulationRequest struct {
+	NexusInstanceID int64
+	RepositoryName  string
+	PolicyYAML      string
+	Limit           int32
+}
+
+type CleanupSimulationResult struct {
+	PolicyName                string
+	EvaluatedTagCount         int64
+	CandidateTagCount         int64
+	ProtectedTagCount         int64
+	WarningCount              int64
+	EstimatedReclaimableBytes int64
+	Candidates                []CleanupSimulationTag
+	Protected                 []CleanupSimulationTag
+	Warnings                  []CleanupSimulationWarning
+}
+
+type CleanupSimulationTag struct {
+	TagID                     int64
+	ImageID                   int64
+	RepositoryID              int64
+	NexusInstanceID           int64
+	RepositoryName            string
+	ImageName                 string
+	Tag                       string
+	PatternName               string
+	RuleName                  string
+	Reason                    string
+	DockerLogicalBytes        int64
+	EstimatedReclaimableBytes int64
+	FirstSeenAt               time.Time
+	LastSeenAt                time.Time
+	LastDownloadedAt          *time.Time
+}
+
+type CleanupSimulationWarning struct {
+	Tag  CleanupSimulationTag
+	Code string
+}
+
+type CleanupExecutionRequest struct {
+	NexusInstanceID        int64
+	RepositoryName         string
+	PolicyYAML             string
+	ApprovalText           string
+	RequestedBy            string
+	DestructiveEnabled     bool
+	NexusUsername          string
+	NexusPassword          string
+	DeleteRPS              float64
+	MaintenanceWindowStart string
+	MaintenanceWindowEnd   string
+	Limit                  int32
+}
+
+type PolicyValidationError struct {
+	Message string
+}
+
+func (e PolicyValidationError) Error() string {
+	return e.Message
+}
+
+func (e PolicyValidationError) InvalidRequest() bool {
+	return true
+}
+
 type TagReclassificationRequest struct {
 	NexusInstanceID int64
 	RepositoryName  string

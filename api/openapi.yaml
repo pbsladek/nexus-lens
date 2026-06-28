@@ -471,6 +471,137 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/packages/repositories:
+    get:
+      operationId: listPackageFormatRepositories
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Repository format support and discover-only package repository status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repositories]
+                properties:
+                  repositories:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PackageFormatRepository"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/analytics/trends/top-movers:
+    get:
+      operationId: listTrendTopMovers
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/RepositoryID"
+        - $ref: "#/components/parameters/ImageID"
+        - $ref: "#/components/parameters/MetricName"
+        - $ref: "#/components/parameters/PatternName"
+        - $ref: "#/components/parameters/StartDate"
+        - $ref: "#/components/parameters/EndDate"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Largest scoped metric deltas between two snapshot dates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [movers]
+                properties:
+                  movers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrendTopMover"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/cleanup/simulations:
+    post:
+      operationId: simulateCleanupPolicy
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CleanupSimulationRequest"
+      responses:
+        "200":
+          description: Read-only cleanup simulation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupSimulationResult"
+        "400":
+          description: Invalid cleanup policy YAML.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/cleanup/executions:
+    post:
+      operationId: requestCleanupExecution
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CleanupExecutionRequest"
+      responses:
+        "202":
+          description: Cleanup execution request audited. Destructive execution may be blocked by read-only mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupExecution"
+        "400":
+          description: Invalid cleanup execution request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/analytics/tag-patterns:
     get:
       operationId: listTagPatternAnalytics
@@ -1264,6 +1395,268 @@ components:
           format: double
         missing:
           type: boolean
+    TrendTopMover:
+      type: object
+      required:
+        - repository_id
+        - repository_name
+        - start_value
+        - end_value
+        - delta_value
+      properties:
+        repository_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+        image_id:
+          type: integer
+          format: int64
+        image_name:
+          type: string
+        start_value:
+          type: number
+          format: double
+        end_value:
+          type: number
+          format: double
+        delta_value:
+          type: number
+          format: double
+        delta_percent:
+          type: number
+          format: double
+    CleanupSimulationRequest:
+      type: object
+      required:
+        - policy_yaml
+      properties:
+        nexus_instance_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+        policy_yaml:
+          type: string
+        limit:
+          type: integer
+          format: int32
+    CleanupSimulationResult:
+      type: object
+      required:
+        - policy_name
+        - evaluated_tag_count
+        - candidate_tag_count
+        - protected_tag_count
+        - warning_count
+        - estimated_reclaimable_bytes
+        - candidates
+        - protected
+        - warnings
+      properties:
+        policy_name:
+          type: string
+        evaluated_tag_count:
+          type: integer
+          format: int64
+        candidate_tag_count:
+          type: integer
+          format: int64
+        protected_tag_count:
+          type: integer
+          format: int64
+        warning_count:
+          type: integer
+          format: int64
+        estimated_reclaimable_bytes:
+          type: integer
+          format: int64
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupSimulationTag"
+        protected:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupSimulationTag"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupSimulationWarning"
+    CleanupSimulationTag:
+      type: object
+      required:
+        - tag_id
+        - image_id
+        - repository_id
+        - nexus_instance_id
+        - repository_name
+        - image_name
+        - tag
+        - pattern_name
+        - docker_logical_bytes
+        - estimated_reclaimable_bytes
+        - first_seen_at
+        - last_seen_at
+      properties:
+        tag_id:
+          type: integer
+          format: int64
+        image_id:
+          type: integer
+          format: int64
+        repository_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+        image_name:
+          type: string
+        tag:
+          type: string
+        pattern_name:
+          type: string
+        rule_name:
+          type: string
+        reason:
+          type: string
+        docker_logical_bytes:
+          type: integer
+          format: int64
+        estimated_reclaimable_bytes:
+          type: integer
+          format: int64
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        last_downloaded_at:
+          type: string
+          format: date-time
+    CleanupSimulationWarning:
+      type: object
+      required:
+        - tag
+        - code
+      properties:
+        tag:
+          $ref: "#/components/schemas/CleanupSimulationTag"
+        code:
+          type: string
+    CleanupExecutionRequest:
+      type: object
+      required:
+        - nexus_instance_id
+        - policy_yaml
+        - approval_text
+      properties:
+        nexus_instance_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+        policy_yaml:
+          type: string
+        approval_text:
+          type: string
+        limit:
+          type: integer
+          format: int32
+    CleanupExecution:
+      type: object
+      required:
+        - id
+        - nexus_instance_id
+        - policy_name
+        - status
+        - requested_by
+        - destructive_enabled
+        - simulation_summary
+        - audit_log
+        - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        repository_name:
+          type: string
+        policy_name:
+          type: string
+        status:
+          type: string
+        requested_by:
+          type: string
+        approved_by:
+          type: string
+        destructive_enabled:
+          type: boolean
+        simulation_summary: {}
+        audit_log: {}
+        post_delete_verification_run_id:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        approved_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+    PackageFormatRepository:
+      type: object
+      required:
+        - repository_id
+        - nexus_instance_id
+        - nexus_name
+        - repository_name
+        - format
+        - type
+        - support_status
+        - support_reason
+        - asset_count
+        - asset_bytes
+      properties:
+        repository_id:
+          type: integer
+          format: int64
+        nexus_instance_id:
+          type: integer
+          format: int64
+        nexus_name:
+          type: string
+        repository_name:
+          type: string
+        format:
+          type: string
+        type:
+          type: string
+        support_status:
+          type: string
+          enum: [indexed, discover_only, skipped, unsupported]
+        support_reason:
+          type: string
+        asset_count:
+          type: integer
+          format: int64
+        asset_bytes:
+          type: integer
+          format: int64
+        last_seen_at:
+          type: string
+          format: date-time
+        last_asset_seen_at:
+          type: string
+          format: date-time
     RepositoryAnalytics:
       type: object
       required:

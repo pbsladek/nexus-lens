@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -305,6 +306,57 @@ func TestListTagAnalyticsFilters(t *testing.T) {
 	}
 }
 
+func TestListPackageFormatRepositoriesAllowsReadOnly(t *testing.T) {
+	now := time.Now()
+	indexing := &fakeIndexingService{
+		packageRepositories: []PackageFormatRepository{{
+			RepositoryID:    12,
+			NexusInstanceID: 7,
+			NexusName:       "local",
+			RepositoryName:  "pypi-hosted",
+			Format:          "pypi",
+			Type:            "hosted",
+			SupportStatus:   "discover_only",
+			SupportReason:   "hosted package repository discovered",
+			LastSeenAt:      &now,
+		}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/packages/repositories?nexus_instance_id=7&search=pypi&limit=25", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.packageRequest.NexusInstanceID != 7 ||
+		indexing.packageRequest.Search != "pypi" ||
+		indexing.packageRequest.Limit != 25 {
+		t.Fatalf("package request = %+v", indexing.packageRequest)
+	}
+	var body struct {
+		Repositories []PackageFormatRepository `json:"repositories"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Repositories) != 1 || body.Repositories[0].SupportStatus != "discover_only" {
+		t.Fatalf("repositories = %+v", body.Repositories)
+	}
+}
+
 func TestListTrendSeriesAllowsReadOnly(t *testing.T) {
 	value := 42.0
 	now := time.Now()
@@ -353,6 +405,170 @@ func TestListTrendSeriesAllowsReadOnly(t *testing.T) {
 	}
 	if len(body.Points) != 1 || body.Points[0].SnapshotDate != "2026-06-28" {
 		t.Fatalf("points = %+v", body.Points)
+	}
+}
+
+func TestListTrendTopMoversAllowsReadOnly(t *testing.T) {
+	percent := 50.0
+	indexing := &fakeIndexingService{
+		trendTopMovers: []TrendTopMover{{
+			RepositoryID:   11,
+			RepositoryName: "docker-hosted-a",
+			StartValue:     100,
+			EndValue:       150,
+			DeltaValue:     50,
+			DeltaPercent:   &percent,
+		}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/trends/top-movers?nexus_instance_id=7&repository_id=11&image_id=22&metric_name=estimated_reclaimable_bytes&pattern_name=feature_branch&start_date=2026-06-01&end_date=2026-06-28&limit=10", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.trendTopMoversRequest.NexusInstanceID != 7 ||
+		indexing.trendTopMoversRequest.RepositoryID != 11 ||
+		indexing.trendTopMoversRequest.ImageID != 22 ||
+		indexing.trendTopMoversRequest.MetricName != "estimated_reclaimable_bytes" ||
+		indexing.trendTopMoversRequest.PatternName != "feature_branch" ||
+		indexing.trendTopMoversRequest.StartDate != "2026-06-01" ||
+		indexing.trendTopMoversRequest.EndDate != "2026-06-28" ||
+		indexing.trendTopMoversRequest.Limit != 10 {
+		t.Fatalf("trend top movers request = %+v", indexing.trendTopMoversRequest)
+	}
+	var body struct {
+		Movers []TrendTopMover `json:"movers"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Movers) != 1 || body.Movers[0].RepositoryName != "docker-hosted-a" {
+		t.Fatalf("movers = %+v", body.Movers)
+	}
+}
+
+func TestSimulateCleanupPolicyAllowsReadOnly(t *testing.T) {
+	indexing := &fakeIndexingService{
+		cleanupSimulation: CleanupSimulationResult{
+			PolicyName:                "ci-cleanup",
+			EvaluatedTagCount:         2,
+			CandidateTagCount:         1,
+			ProtectedTagCount:         1,
+			EstimatedReclaimableBytes: 1024,
+			Candidates: []CleanupSimulationTag{{
+				TagID:          101,
+				RepositoryName: "docker-hosted-a",
+				ImageName:      "demo/app",
+				Tag:            "feature-123",
+				PatternName:    "feature_branch",
+				RuleName:       "old feature branches",
+			}},
+			Protected: []CleanupSimulationTag{{
+				TagID:          102,
+				RepositoryName: "docker-hosted-a",
+				ImageName:      "demo/app",
+				Tag:            "latest",
+				PatternName:    "channel",
+			}},
+		},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	body := strings.NewReader(`{"nexus_instance_id":7,"repository_name":"docker-hosted-a","policy_yaml":"name: ci-cleanup\ncandidate_rules:\n  - name: old feature branches\n    patterns: [feature_branch]\n","limit":25}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cleanup/simulations", body)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.cleanupRequest.NexusInstanceID != 7 ||
+		indexing.cleanupRequest.RepositoryName != "docker-hosted-a" ||
+		indexing.cleanupRequest.Limit != 25 ||
+		!strings.Contains(indexing.cleanupRequest.PolicyYAML, "feature_branch") {
+		t.Fatalf("cleanup request = %+v", indexing.cleanupRequest)
+	}
+	var response CleanupSimulationResult
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.PolicyName != "ci-cleanup" || len(response.Candidates) != 1 || len(response.Protected) != 1 {
+		t.Fatalf("cleanup response = %+v", response)
+	}
+}
+
+func TestRequestCleanupExecutionRequiresAdminAndRecordsApproval(t *testing.T) {
+	now := time.Now()
+	indexing := &fakeIndexingService{
+		cleanupExecution: CleanupExecution{
+			ID:                 9,
+			NexusInstanceID:    7,
+			PolicyName:         "ci-cleanup",
+			Status:             "blocked_read_only",
+			RequestedBy:        "admin",
+			DestructiveEnabled: false,
+			SimulationSummary:  map[string]any{"candidate_tag_count": 1},
+			AuditLog:           []any{map[string]any{"event": "approval_recorded"}},
+			CreatedAt:          now,
+		},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	body := strings.NewReader(`{"nexus_instance_id":7,"policy_yaml":"name: ci-cleanup\ncandidate_rules:\n  - name: old feature branches\n    patterns: [feature_branch]\n","approval_text":"ci-cleanup","limit":25}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cleanup/executions", body)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if indexing.cleanupExecutionRequest.RequestedBy != "admin" ||
+		indexing.cleanupExecutionRequest.NexusInstanceID != 7 ||
+		indexing.cleanupExecutionRequest.ApprovalText != "ci-cleanup" {
+		t.Fatalf("cleanup execution request = %+v", indexing.cleanupExecutionRequest)
+	}
+	var response CleanupExecution
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != "blocked_read_only" || response.DestructiveEnabled {
+		t.Fatalf("cleanup execution = %+v", response)
 	}
 }
 
@@ -901,7 +1117,11 @@ type fakeIndexingService struct {
 	repositories            []RepositoryAnalytics
 	images                  []ImageAnalytics
 	tags                    []TagAnalytics
+	packageRepositories     []PackageFormatRepository
 	trendPoints             []TrendPoint
+	trendTopMovers          []TrendTopMover
+	cleanupSimulation       CleanupSimulationResult
+	cleanupExecution        CleanupExecution
 	patterns                []TagPattern
 	patternAnalytics        []TagPatternAnalytics
 	patternGrowth           []TagPatternGrowth
@@ -927,7 +1147,11 @@ type fakeIndexingService struct {
 	rateLimitRequest        RateLimitSettings
 	analyticsNexusID        int64
 	analyticsRequest        AnalyticsListRequest
+	packageRequest          AnalyticsListRequest
 	trendRequest            TrendSeriesRequest
+	trendTopMoversRequest   TrendTopMoversRequest
+	cleanupRequest          CleanupSimulationRequest
+	cleanupExecutionRequest CleanupExecutionRequest
 	patternRequest          TagPatternListRequest
 	patternSaveRequest      UpsertTagPatternRequest
 	reclassificationRequest TagReclassificationRequest
@@ -1025,9 +1249,35 @@ func (f *fakeIndexingService) ListTagAnalytics(_ context.Context, req AnalyticsL
 	return f.tags, nil
 }
 
+func (f *fakeIndexingService) ListPackageFormatRepositories(_ context.Context, req AnalyticsListRequest) ([]PackageFormatRepository, error) {
+	f.packageRequest = req
+	return f.packageRepositories, nil
+}
+
 func (f *fakeIndexingService) ListTrendSeries(_ context.Context, req TrendSeriesRequest) ([]TrendPoint, error) {
 	f.trendRequest = req
 	return f.trendPoints, nil
+}
+
+func (f *fakeIndexingService) ListTrendTopMovers(_ context.Context, req TrendTopMoversRequest) ([]TrendTopMover, error) {
+	f.trendTopMoversRequest = req
+	return f.trendTopMovers, nil
+}
+
+func (f *fakeIndexingService) SimulateCleanupPolicy(_ context.Context, req CleanupSimulationRequest) (CleanupSimulationResult, error) {
+	f.cleanupRequest = req
+	if f.err != nil {
+		return CleanupSimulationResult{}, f.err
+	}
+	return f.cleanupSimulation, nil
+}
+
+func (f *fakeIndexingService) RequestCleanupExecution(_ context.Context, req CleanupExecutionRequest) (CleanupExecution, error) {
+	f.cleanupExecutionRequest = req
+	if f.err != nil {
+		return CleanupExecution{}, f.err
+	}
+	return f.cleanupExecution, nil
 }
 
 func (f *fakeIndexingService) ListTagPatterns(context.Context) ([]TagPattern, error) {

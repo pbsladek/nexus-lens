@@ -4,7 +4,7 @@ This file tracks implementation progress against the phased plan in `docs/nexus-
 
 ## Current Phase
 
-Phase 7: Trends and storage analytics.
+All planned phases are complete through Phase 10: Controlled execution.
 
 ## Completed
 
@@ -82,6 +82,20 @@ Phase 7: Trends and storage analytics.
 - [x] Added sqlc queries for capturing daily trend snapshots, listing gap-aware daily series, listing metric names, and deleting snapshots before a retention cutoff.
 - [x] Added queued `trend_snapshot` scan/task support for manual and scheduled runs with worker-side 365-day retention cleanup.
 - [x] Added read-only trends API for storage and tag-pattern metric time series with explicit missing-day points.
+- [x] Added Phase 7 freshness, estimated reclaimable byte, and top-mover trend metrics.
+- [x] Added trend UI controls, missing-day visualization, top-mover tables, and links back to filtered explorer views.
+- [x] Added Phase 8 read-only cleanup policy YAML simulation with protected tag rules, tag-pattern candidate rules, warning rows, and exportable JSON results.
+- [x] Added cleanup simulation API/UI coverage for validation errors, simulation execution, candidate rows, protected rows, warnings, and explorer filter links.
+- [x] Added Phase 9 generic artifact schema preparation for future package format indexers.
+- [x] Added package repository discover-only API/UI for hosted PyPI, npm, and Go repositories, while marking Docker as indexed and unsupported/proxy/group repositories as skipped or unsupported.
+- [x] Added Phase 10 cleanup execution audit schema and admin-only approval endpoint tied to a fresh simulation.
+- [x] Kept destructive cleanup execution disabled by default with explicit read-only blocked audit records.
+- [x] Added controlled execution UI approval controls and Playwright coverage for blocked read-only execution requests.
+- [x] Added Nexus component resolution and delete integration for Docker hosted tags behind `NEXUS_LENS_ENABLE_DESTRUCTIVE_CLEANUP=true`.
+- [x] Added cleanup executor safety checks for active index operation locks, Nexus credential presence, configurable UTC maintenance windows, and configurable delete rate limiting.
+- [x] Added immediate local tag deletion marking after a successful Nexus component delete so active analytics reflect destructive cleanup without waiting for a later reconcile.
+- [x] Added post-delete verification run scheduling and `cleanup_executions.post_delete_verification_run_id` audit linkage.
+- [x] Added Helm values/schema and deployment wiring for optional user-managed Nexus credential Secret refs and cleanup execution controls.
 
 ## Validation
 
@@ -179,8 +193,36 @@ Phase 7: Trends and storage analytics.
 - [x] Live trend snapshot capture wrote daily storage and tag-pattern metric rows for Nexus 1.
 - [x] Live trends API returns exactly one Nexus-level `docker_logical_bytes` point for `2026-06-28`.
 - [x] Live trends API returns an explicit missing point for `2026-06-27` when querying a two-day range.
+- [x] `go test ./...`
+- [x] `make typecheck`
+- [x] `cd web && npm run build`
+- [x] `cd web && npm run test:e2e`
+- [x] `make helm-template`
+- [x] `make compose-config`
+- [x] Live `trend_snapshot` run 50 completed successfully with 1 completed task and 0 failed tasks after adding freshness/reclaimable metrics.
+- [x] Live trends API returns non-missing zero-count freshness metrics, including Nexus-level `never_downloaded_count=0` for `2026-06-28`.
+- [x] Live trends top-movers API returns repository/image-scoped mover rows for `estimated_reclaimable_bytes`.
+- [x] Live cleanup simulation API evaluates 12 tags, returns 3 candidates, 4 protected tags, and 0 warnings for the live seeded policy check.
+- [x] Phase 9 migration `000014_generic_artifacts.sql` applies locally and reaches Goose version 14.
+- [x] Live package repository API returns indexed Docker repositories, skipped proxy/group repositories, and unsupported hosted non-Docker repositories from the seeded Nexus.
+- [x] Phase 10 migration `000015_cleanup_executions.sql` applies locally and reaches Goose version 15.
+- [x] Live cleanup execution request records approval and returns `blocked_read_only` with `destructive_enabled=false` while preserving simulation summary and audit log.
+- [x] Local Nexus 3.88.0 REST schema confirms `/service/rest/v1/search` supports `docker.imageName`/`docker.imageTag` and `/service/rest/v1/components/{id}` supports component delete.
+- [x] Live Nexus search for seeded tag `docker-hosted-a/nexus-lens/app:pr-123` resolves exactly one Docker component before delete integration.
+- [x] Runtime Compose API rebuild with destructive cleanup disabled records a `blocked_read_only` execution with zero deleted, skipped, or failed candidates.
+- [x] Live destructive cleanup against seeded Nexus deleted `docker-hosted-a/nexus-lens/app:pr-123`, removed the Nexus component, and enqueued successful verification run 53.
+- [x] Live destructive cleanup against seeded Nexus after local index marking fix deleted `docker-hosted-a/nexus-lens/app:a1b2c3d`, removed the Nexus component, removed the active analytics row immediately, and enqueued successful verification run 54.
+- [x] Live scoped `full_reconcile` run 55 completed successfully for `docker-hosted-a` and confirmed both live-deleted seeded tags are absent from active analytics.
+- [x] Unit tests cover Nexus Docker component search parameters, continuation tokens, component delete paths, cleanup maintenance-window checks, and exact one-component match enforcement.
+- [x] `go test ./...`
+- [x] `make typecheck`
+- [x] `cd web && npm run build`
+- [x] `cd web && npm run test:e2e`
+- [x] `make helm-template`
+- [x] `helm template nexus-lens ./charts/nexus-lens --set nexus.credentials.existingSecret=nexus-auth --set cleanup.destructiveExecution.enabled=true --set cleanup.destructiveExecution.maintenanceWindowUTC.start=01:00 --set cleanup.destructiveExecution.maintenanceWindowUTC.end=03:00`
+- [x] `make compose-config`
 
-## In Progress
+## Implementation Checklist
 
 - [x] Run `docker compose -f deploy/compose/compose.yaml up -d postgres nexus web`.
 - [x] Capture Nexus admin password with `make fixture-capture-password`.
@@ -237,13 +279,20 @@ Phase 7: Trends and storage analytics.
 - [x] Add Phase 7 trend snapshot schema, queries, and retention cleanup.
 - [x] Add trend snapshot worker task/schedule support.
 - [x] Add daily time-series APIs for storage and tag pattern trends.
-
-### Resume Placeholder
-
-Pick back up in Phase 7 here. The foundation is in place: migration `000013_trend_snapshots.sql`, `db/queries/trend_snapshots.sql`, queued `trend_snapshot` runs, the read-only trends API, and live validation against Compose. Next implement the remaining Phase 7 metrics and UI.
-
-- [ ] Add freshness, reclaimable-byte, and top-mover trend metrics.
-- [ ] Add trend visualizations with missing-day gaps and links back to filtered explorer views.
+- [x] Add freshness, reclaimable-byte, and top-mover trend metrics.
+- [x] Add trend visualizations with missing-day gaps and links back to filtered explorer views.
+- [x] Add Phase 8 policy YAML format.
+- [x] Add Phase 8 read-only simulation engine with protected and candidate rules.
+- [x] Add Phase 8 simulator UI with validation errors and candidate/protected/warning tables.
+- [x] Add generic artifact model preparation for hosted PyPI, npm, and Go module formats.
+- [x] Add discover-only views for unsupported hosted package formats.
+- [x] Verify Docker/OCI analytics remain unchanged.
+- [x] Add execution approval workflow tied to prior cleanup simulations.
+- [x] Add audit log for cleanup execution requests.
+- [x] Keep destructive execution disabled unless explicitly enabled.
+- [x] Add Nexus cleanup/delete integration behind `NEXUS_LENS_ENABLE_DESTRUCTIVE_CLEANUP=true`.
+- [x] Add executor rate limits and maintenance-window checks.
+- [x] Add post-delete verification run scheduling and audit linkage.
 
 ## Notes
 

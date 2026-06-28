@@ -29,6 +29,54 @@
         "replicas": { "type": "integer", "minimum": 1 }
       }
     },
+    "nexus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentials"],
+      "properties": {
+        "credentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret", "usernameKey", "passwordKey"],
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "usernameKey": { "type": "string", "minLength": 1 },
+            "passwordKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destructiveExecution"],
+      "properties": {
+        "destructiveExecution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "deleteRPS", "maintenanceWindowUTC"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "deleteRPS": { "type": "number", "minimum": 0 },
+            "maintenanceWindowUTC": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+                },
+                "end": {
+                  "type": "string",
+                  "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "postgres": {
       "type": "object",
       "additionalProperties": false,

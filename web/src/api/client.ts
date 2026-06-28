@@ -40,6 +40,20 @@ export type TagAnalytics =
   paths["/api/v1/analytics/tags"]["get"]["responses"][200]["content"]["application/json"]["tags"][number];
 export type TrendPoint =
   paths["/api/v1/analytics/trends"]["get"]["responses"][200]["content"]["application/json"]["points"][number];
+export type TrendTopMover =
+  paths["/api/v1/analytics/trends/top-movers"]["get"]["responses"][200]["content"]["application/json"]["movers"][number];
+export type CleanupSimulationRequest =
+  paths["/api/v1/cleanup/simulations"]["post"]["requestBody"]["content"]["application/json"];
+export type CleanupSimulationResult =
+  paths["/api/v1/cleanup/simulations"]["post"]["responses"][200]["content"]["application/json"];
+export type CleanupSimulationTag = CleanupSimulationResult["candidates"][number];
+export type CleanupSimulationWarning = CleanupSimulationResult["warnings"][number];
+export type CleanupExecutionRequest =
+  paths["/api/v1/cleanup/executions"]["post"]["requestBody"]["content"]["application/json"];
+export type CleanupExecution =
+  paths["/api/v1/cleanup/executions"]["post"]["responses"][202]["content"]["application/json"];
+export type PackageFormatRepository =
+  paths["/api/v1/packages/repositories"]["get"]["responses"][200]["content"]["application/json"]["repositories"][number];
 export type TagPattern =
   paths["/api/v1/admin/tag-patterns"]["get"]["responses"][200]["content"]["application/json"]["patterns"][number];
 export type UpsertTagPatternRequest =
@@ -344,6 +358,76 @@ export async function listTrendSeries(
     throw new Error(`trend series request failed with status ${response.status}`);
   }
   return (await response.json()) as { points: TrendPoint[] };
+}
+
+export async function listTrendTopMovers(
+  options: AnalyticsListOptions = {},
+): Promise<{ movers: TrendTopMover[] }> {
+  const response = await fetch(
+    `${apiBaseURL}/api/v1/analytics/trends/top-movers?${analyticsParams(options).toString()}`,
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    throw new Error(`trend top movers request failed with status ${response.status}`);
+  }
+  return (await response.json()) as { movers: TrendTopMover[] };
+}
+
+export async function simulateCleanupPolicy(
+  request: CleanupSimulationRequest,
+): Promise<CleanupSimulationResult> {
+  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/simulations`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      body && typeof body === "object" && "message" in body && typeof body.message === "string"
+        ? body.message
+        : `cleanup simulation failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return (await response.json()) as CleanupSimulationResult;
+}
+
+export async function listPackageFormatRepositories(
+  options: AnalyticsListOptions = {},
+): Promise<{ repositories: PackageFormatRepository[] }> {
+  const response = await fetch(
+    `${apiBaseURL}/api/v1/packages/repositories?${analyticsParams(options).toString()}`,
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    throw new Error(`package repositories request failed with status ${response.status}`);
+  }
+  return (await response.json()) as { repositories: PackageFormatRepository[] };
+}
+
+export async function requestCleanupExecution(
+  request: CleanupExecutionRequest,
+): Promise<CleanupExecution> {
+  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const message =
+      body && typeof body === "object" && "message" in body && typeof body.message === "string"
+        ? body.message
+        : `cleanup execution failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return (await response.json()) as CleanupExecution;
 }
 
 export async function listTagPatterns(): Promise<{ patterns: TagPattern[] }> {

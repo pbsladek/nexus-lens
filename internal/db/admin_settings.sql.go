@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getNexusInstanceByID = `-- name: GetNexusInstanceByID :one
+SELECT id, name, base_url, created_at, updated_at
+FROM nexus_instances
+WHERE id = $1
+`
+
+type GetNexusInstanceByIDRow struct {
+	ID        int64
+	Name      string
+	BaseUrl   string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+func (q *Queries) GetNexusInstanceByID(ctx context.Context, id int64) (GetNexusInstanceByIDRow, error) {
+	row := q.db.QueryRow(ctx, getNexusInstanceByID, id)
+	var i GetNexusInstanceByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.BaseUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listIndexingSchedules = `-- name: ListIndexingSchedules :many
 SELECT
   s.id,

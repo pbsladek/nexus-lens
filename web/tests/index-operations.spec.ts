@@ -163,6 +163,85 @@ test.beforeEach(async ({ page }) => {
       });
       return;
     }
+    if (path === "/api/v1/analytics/trends") {
+      await route.fulfill({
+        json: {
+          points: [
+            {
+              snapshot_date: "2026-06-26",
+              captured_at: "2026-06-26T04:00:00Z",
+              metric_value: 3221225472,
+              missing: false,
+            },
+            {
+              snapshot_date: "2026-06-27",
+              missing: true,
+            },
+            {
+              snapshot_date: "2026-06-28",
+              captured_at: now,
+              metric_value: 5368709120,
+              missing: false,
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/packages/repositories") {
+      await route.fulfill({
+        json: {
+          repositories: [
+            {
+              repository_id: 1,
+              nexus_instance_id: 7,
+              nexus_name: "local",
+              repository_name: "docker-hosted-a",
+              format: "docker",
+              type: "hosted",
+              support_status: "indexed",
+              support_reason: "docker/oci analytics are fully indexed",
+              asset_count: 49,
+              asset_bytes: 2147483648,
+              last_seen_at: now,
+            },
+            {
+              repository_id: 21,
+              nexus_instance_id: 7,
+              nexus_name: "local",
+              repository_name: "pypi-hosted",
+              format: "pypi",
+              type: "hosted",
+              support_status: "discover_only",
+              support_reason: "hosted package repository discovered; format-specific artifact indexing is not enabled yet",
+              asset_count: 0,
+              asset_bytes: 0,
+              last_seen_at: now,
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/analytics/trends/top-movers") {
+      await route.fulfill({
+        json: {
+          movers: [
+            {
+              repository_id: 1,
+              repository_name: "docker-hosted-a",
+              image_id: 11,
+              image_name: "demo/app",
+              start_value: 3221225472,
+              end_value: 5368709120,
+              delta_value: 2147483648,
+              delta_percent: 66.7,
+            },
+          ],
+        },
+      });
+      return;
+    }
     if (path === "/api/v1/analytics/tag-patterns") {
       await route.fulfill({
         json: {
@@ -397,6 +476,120 @@ test.beforeEach(async ({ page }) => {
       });
       return;
     }
+    if (path === "/api/v1/cleanup/simulations" && request.method() === "POST") {
+      const body = request.postDataJSON() as { policy_yaml?: string };
+      if (!body.policy_yaml?.includes("candidate_rules")) {
+        await route.fulfill({
+          status: 400,
+          json: {
+            code: "cleanup_policy_invalid",
+            message: "at least one candidate rule is required",
+            request_id: "test",
+            retryable: false,
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          policy_name: "ci-feature-cleanup",
+          evaluated_tag_count: 2,
+          candidate_tag_count: 1,
+          protected_tag_count: 1,
+          warning_count: 1,
+          estimated_reclaimable_bytes: 1073741824,
+          candidates: [
+            {
+              tag_id: 101,
+              image_id: 11,
+              repository_id: 1,
+              nexus_instance_id: 7,
+              repository_name: "docker-hosted-a",
+              image_name: "demo/app",
+              tag: "feature-123",
+              pattern_name: "feature_branch",
+              rule_name: "old feature branches",
+              reason: "pattern, older than 30d, never downloaded",
+              docker_logical_bytes: 2684354560,
+              estimated_reclaimable_bytes: 1073741824,
+              first_seen_at: "2026-05-01T00:00:00Z",
+              last_seen_at: now,
+            },
+          ],
+          protected: [
+            {
+              tag_id: 102,
+              image_id: 11,
+              repository_id: 1,
+              nexus_instance_id: 7,
+              repository_name: "docker-hosted-a",
+              image_name: "demo/app",
+              tag: "latest",
+              pattern_name: "channel",
+              rule_name: "protected",
+              reason: "matched protected rule",
+              docker_logical_bytes: 2684354560,
+              estimated_reclaimable_bytes: 0,
+              first_seen_at: "2026-05-01T00:00:00Z",
+              last_seen_at: now,
+            },
+          ],
+          warnings: [
+            {
+              code: "missing_manifest",
+              tag: {
+                tag_id: 103,
+                image_id: 11,
+                repository_id: 1,
+                nexus_instance_id: 7,
+                repository_name: "docker-hosted-a",
+                image_name: "demo/app",
+                tag: "broken",
+                pattern_name: "unclassified",
+                docker_logical_bytes: 0,
+                estimated_reclaimable_bytes: 0,
+                first_seen_at: "2026-05-01T00:00:00Z",
+                last_seen_at: now,
+              },
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/cleanup/executions" && request.method() === "POST") {
+      const body = request.postDataJSON() as { approval_text?: string };
+      if (body.approval_text !== "ci-feature-cleanup") {
+        await route.fulfill({
+          status: 400,
+          json: {
+            code: "cleanup_execution_invalid",
+            message: "approval_text must match policy name ci-feature-cleanup",
+            request_id: "test",
+            retryable: false,
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 202,
+        json: {
+          id: 9,
+          nexus_instance_id: 7,
+          policy_name: "ci-feature-cleanup",
+          status: "blocked_read_only",
+          requested_by: "admin",
+          approved_by: "admin",
+          destructive_enabled: false,
+          simulation_summary: { candidate_tag_count: 1 },
+          audit_log: [{ event: "approval_recorded" }],
+          created_at: now,
+          approved_at: now,
+          finished_at: now,
+        },
+      });
+      return;
+    }
 
     await route.fulfill({ status: 404, json: { code: "not_found" } });
   });
@@ -411,12 +604,20 @@ test("shows run status, queue, findings, and admin settings", async ({ page }) =
   await expect(page.getByText("docker-hosted-a").first()).toBeVisible();
   await expect(page.getByText("demo/app:feature-123")).toBeVisible();
   await expect(page.getByRole("cell", { name: "never" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Package formats" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "pypi-hosted" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "discover_only" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Trends" })).toBeVisible();
+  await expect(page.getByText("2026-06-27")).toBeVisible();
+  await expect(page.getByText("missing", { exact: true })).toBeVisible();
+  await expect(page.getByText("+2.0 GiB")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Tag patterns" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "semver" }).first()).toBeVisible();
   await expect(page.getByRole("cell", { name: "demo", exact: true })).toBeVisible();
   await expect(page.getByText("demo/app:v1.2.3")).toBeVisible();
   await expect(page.getByRole("cell", { name: "Feature branch" })).toBeVisible();
   await expect(page.getByText("team-123-build")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cleanup simulation" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recent runs" })).toBeVisible();
   await expect(page.getByRole("button", { name: "42" })).toBeVisible();
   await expect(page.getByText("nexus_repository_list_network_failed")).toBeVisible();
@@ -444,7 +645,7 @@ test("applies artifact explorer filters", async ({ page }) => {
   await page.getByLabel("Repository").fill("docker-hosted-a");
   await page.getByLabel("Search image or tag").fill("feature");
   await page.getByLabel("Older than days").fill("14");
-  await page.getByLabel("Never downloaded").check();
+  await page.getByRole("checkbox", { name: "Never downloaded" }).check();
 
   const tagRequest = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -495,4 +696,36 @@ test("saves a tag pattern and starts reclassification", async ({ page }) => {
   await page.getByRole("button", { name: "Reclassify" }).click();
   await reclassifyRequest;
   await expect(page.getByText("started tag_reclassification run 88")).toBeVisible();
+});
+
+test("validates and runs cleanup simulation", async ({ page }) => {
+  await page.goto("/");
+  const section = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Cleanup simulation" }),
+  });
+  await section.getByLabel("Policy YAML").fill("name: invalid");
+  await section.getByRole("button", { name: "Simulate" }).click();
+  await expect(section.getByText("at least one candidate rule is required")).toBeVisible();
+
+  await section.getByRole("button", { name: "Reset policy" }).click();
+  const simulationRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/cleanup/simulations" && request.method() === "POST";
+  });
+  await section.getByRole("button", { name: "Simulate" }).click();
+  await simulationRequest;
+
+  await expect(section.getByRole("cell", { name: "old feature branches" })).toBeVisible();
+  await expect(section.getByText("demo/app:feature-123")).toBeVisible();
+  await expect(section.getByText("demo/app:latest")).toBeVisible();
+  await expect(section.getByText("missing_manifest")).toBeVisible();
+
+  await section.getByLabel("Approval text").fill("ci-feature-cleanup");
+  const executionRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/cleanup/executions" && request.method() === "POST";
+  });
+  await section.getByRole("button", { name: "Request execution" }).click();
+  await executionRequest;
+  await expect(section.getByText("Execution 9: blocked_read_only")).toBeVisible();
 });
