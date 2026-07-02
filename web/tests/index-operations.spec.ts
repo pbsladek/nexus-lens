@@ -29,6 +29,10 @@ test.beforeEach(async ({ page }) => {
       });
       return;
     }
+    if (path === "/api/v1/admin/status") {
+      await route.fulfill({ json: { status: "ok" } });
+      return;
+    }
     if (path === "/api/v1/index/runs" && request.method() === "GET") {
       await route.fulfill({
         json: {
@@ -225,7 +229,7 @@ test.beforeEach(async ({ page }) => {
               repository_name: "pypi-hosted",
               format: "pypi",
               type: "hosted",
-              support_status: "discover_only",
+              support_status: "asset_indexed",
               support_reason: "hosted package repository discovered; format-specific artifact indexing is not enabled yet",
               asset_count: 0,
               asset_bytes: 0,
@@ -698,9 +702,18 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("shows run status, queue, findings, and admin settings", async ({ page }) => {
+  const schedulesRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      url.pathname === "/api/v1/admin/indexing-schedules" &&
+      request.method() === "GET" &&
+      url.searchParams.get("nexus_instance_id") === "7"
+    );
+  });
   await page.goto("/");
+  await schedulesRequest;
 
-  await expect(page.getByText("API: ok")).toBeVisible();
+  await expect(page.getByText("API: ok", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Artifact overview" })).toBeVisible();
   await expect(page.locator(".metric").filter({ hasText: "Nexus asset bytes" })).toContainText("3.0 GiB");
   await expect(page.getByText("docker-hosted-a").first()).toBeVisible();
@@ -708,7 +721,7 @@ test("shows run status, queue, findings, and admin settings", async ({ page }) =
   await expect(page.getByRole("cell", { name: "never" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Package formats" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "pypi-hosted" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "discover_only" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "asset_indexed" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Trends" })).toBeVisible();
   await expect(page.getByText("2026-06-27")).toBeVisible();
   await expect(page.getByText("missing", { exact: true })).toBeVisible();
@@ -725,6 +738,24 @@ test("shows run status, queue, findings, and admin settings", async ({ page }) =
   await expect(page.getByText("nexus_repository_list_network_failed")).toBeVisible();
   await expect(page.getByText("docker_tag_digest_missing")).toBeVisible();
   await expect(page.getByText("recent-sync")).toBeVisible();
+  await expect(page.getByText("Admin API: ok")).toBeVisible();
+});
+
+test("toggles and persists light and dark mode", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!window.localStorage.getItem("nexus-lens-theme")) {
+      window.localStorage.setItem("nexus-lens-theme", "light");
+    }
+  });
+  await page.goto("/");
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Dark mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: "Light mode" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
 
 test("requires typed confirmation for full reconcile", async ({ page }) => {
@@ -744,10 +775,13 @@ test("requires typed confirmation for full reconcile", async ({ page }) => {
 
 test("applies artifact explorer filters", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Repository").fill("docker-hosted-a");
-  await page.getByLabel("Search image or tag").fill("feature");
-  await page.getByLabel("Older than days").fill("14");
-  await page.getByRole("checkbox", { name: "Never downloaded" }).check();
+  const explorer = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Artifact explorer" }),
+  });
+  await explorer.getByLabel("Repository", { exact: true }).fill("docker-hosted-a");
+  await explorer.getByLabel("Search image or tag").fill("feature");
+  await explorer.getByLabel("Older than days").fill("14");
+  await explorer.getByRole("checkbox", { name: "Never downloaded" }).check();
 
   const tagRequest = page.waitForRequest((request) => {
     const url = new URL(request.url());
@@ -775,6 +809,23 @@ test("applies artifact explorer filters", async ({ page }) => {
   });
   await tagPatterns.getByRole("button", { name: "Refresh" }).click();
   await growthRequest;
+
+  const trends = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Trends" }),
+  });
+  await trends.getByLabel("Repository ID").fill("1");
+  await trends.getByLabel("Image ID").fill("11");
+  const trendRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      url.pathname === "/api/v1/analytics/trends" &&
+      url.searchParams.get("repository_id") === "1" &&
+      url.searchParams.get("image_id") === "11" &&
+      url.searchParams.get("metric_name") === "docker_logical_bytes"
+    );
+  });
+  await trends.getByRole("button", { name: "Refresh" }).click();
+  await trendRequest;
 });
 
 test("saves a tag pattern and starts reclassification", async ({ page }) => {
@@ -892,7 +943,7 @@ test("operates indexing controls, queue retry, findings dismissal, schedules, an
   await scheduleRequest;
   await expect(page.getByText("saved schedule bounded-weekly")).toBeVisible();
 
-  await settings.getByLabel("Asset list RPS").fill("4");
+  await settings.getByLabel("Asset list RPS").fill("0");
   await settings.getByLabel("Manifest RPS").fill("2");
   await settings.getByLabel("Default RPS").fill("8");
   const rateLimitRequest = page.waitForRequest((request) => {
@@ -905,7 +956,7 @@ test("operates indexing controls, queue retry, findings dismissal, schedules, an
       registry_manifest_rps?: number;
       default_rps?: number;
     };
-    return body.asset_list_rps === 4 && body.registry_manifest_rps === 2 && body.default_rps === 8;
+    return body.asset_list_rps === 0 && body.registry_manifest_rps === 2 && body.default_rps === 8;
   });
   await settings.getByRole("button", { name: "Save rate limits" }).click();
   await rateLimitRequest;

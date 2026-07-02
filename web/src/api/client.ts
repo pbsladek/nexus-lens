@@ -2,6 +2,8 @@ import type { paths } from "./types";
 
 type HealthResponse =
   paths["/api/v1/health"]["get"]["responses"][200]["content"]["application/json"];
+type StatusResponse =
+  paths["/api/v1/admin/status"]["get"]["responses"][200]["content"]["application/json"];
 export type AppUser =
   paths["/api/v1/me"]["get"]["responses"][200]["content"]["application/json"];
 type LoginRequest =
@@ -53,34 +55,9 @@ export type CleanupSimulationWarning = CleanupSimulationResult["warnings"][numbe
 export type CleanupExecutionRequest =
   paths["/api/v1/cleanup/executions"]["post"]["requestBody"]["content"]["application/json"];
 export type CleanupExecution =
-  paths["/api/v1/cleanup/executions"]["post"]["responses"][202]["content"]["application/json"] & {
-    approved_candidate_count?: number;
-    post_delete_reconcile_run_id?: number;
-    started_at?: string;
-    cancel_requested_at?: string;
-    canceled_by?: string;
-    locked_by?: string;
-    lease_expires_at?: string;
-  };
-export type CleanupExecutionEvent = {
-  id: number;
-  cleanup_execution_id: number;
-  event_type: string;
-  actor?: string;
-  repository_name?: string;
-  image_name?: string;
-  tag?: string;
-  tag_id?: number;
-  rule_name?: string;
-  component_id?: string;
-  status?: string;
-  message?: string;
-  error_class?: string;
-  error_code?: string;
-  error_message?: string;
-  details?: unknown;
-  created_at: string;
-};
+  paths["/api/v1/cleanup/executions"]["get"]["responses"][200]["content"]["application/json"]["executions"][number];
+export type CleanupExecutionEvent =
+  paths["/api/v1/cleanup/executions/{cleanup_execution_id}/events"]["get"]["responses"][200]["content"]["application/json"]["events"][number];
 export type PackageFormatRepository =
   paths["/api/v1/packages/repositories"]["get"]["responses"][200]["content"]["application/json"]["repositories"][number];
 export type TagPattern =
@@ -173,6 +150,16 @@ export async function logout(): Promise<void> {
   }
 }
 
+export async function getAdminStatus(): Promise<StatusResponse> {
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/status`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(await problemMessage(response, `admin status request failed with status ${response.status}`));
+  }
+  return (await response.json()) as StatusResponse;
+}
+
 export async function listIndexRuns(limit?: number): Promise<IndexRunsResponse> {
   const params = new URLSearchParams();
   if (limit) {
@@ -236,7 +223,7 @@ export async function upsertIndexingSchedule(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`save indexing schedule failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `save indexing schedule failed with status ${response.status}`));
   }
   return (await response.json()) as IndexingSchedule;
 }
@@ -254,7 +241,7 @@ export async function updateNexusRateLimits(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`save rate limits failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `save rate limits failed with status ${response.status}`));
   }
   return (await response.json()) as IndexingControl;
 }
@@ -281,7 +268,7 @@ export async function updateRetentionSettings(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`save retention settings failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `save retention settings failed with status ${response.status}`));
   }
   return (await response.json()) as RetentionSettings;
 }
@@ -296,12 +283,7 @@ export async function startIndexRun(request: StartIndexRunRequest): Promise<Inde
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    const message =
-      body && typeof body === "object" && "message" in body && typeof body.message === "string"
-        ? body.message
-        : `start index run failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await problemMessage(response, `start index run failed with status ${response.status}`));
   }
   return (await response.json()) as IndexRun;
 }
@@ -327,7 +309,7 @@ export async function retryIndexTask(taskID: number): Promise<IndexTask> {
     credentials: "include",
   });
   if (!response.ok) {
-    throw new Error(`retry index task failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `retry index task failed with status ${response.status}`));
   }
   return (await response.json()) as IndexTask;
 }
@@ -338,7 +320,7 @@ export async function cancelIndexRun(scanRunID: number): Promise<IndexRun> {
     credentials: "include",
   });
   if (!response.ok) {
-    throw new Error(`cancel index run failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `cancel index run failed with status ${response.status}`));
   }
   return (await response.json()) as IndexRun;
 }
@@ -458,12 +440,7 @@ export async function simulateCleanupPolicy(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    const message =
-      body && typeof body === "object" && "message" in body && typeof body.message === "string"
-        ? body.message
-        : `cleanup simulation failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await problemMessage(response, `cleanup simulation failed with status ${response.status}`));
   }
   return (await response.json()) as CleanupSimulationResult;
 }
@@ -493,12 +470,7 @@ export async function requestCleanupExecution(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    const message =
-      body && typeof body === "object" && "message" in body && typeof body.message === "string"
-        ? body.message
-        : `cleanup execution failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(await problemMessage(response, `cleanup execution failed with status ${response.status}`));
   }
   return (await response.json()) as CleanupExecution;
 }
@@ -541,7 +513,7 @@ export async function cancelCleanupExecution(cleanupExecutionID: number): Promis
     credentials: "include",
   });
   if (!response.ok) {
-    throw new Error(`cleanup execution cancel failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `cleanup execution cancel failed with status ${response.status}`));
   }
   return (await response.json()) as CleanupExecution;
 }
@@ -571,7 +543,7 @@ export async function upsertTagPattern(request: UpsertTagPatternRequest): Promis
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`save tag pattern failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `save tag pattern failed with status ${response.status}`));
   }
   return (await response.json()) as TagPattern;
 }
@@ -586,7 +558,7 @@ export async function startTagReclassification(request: TagReclassificationReque
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`start tag reclassification failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `start tag reclassification failed with status ${response.status}`));
   }
   return (await response.json()) as IndexRun;
 }
@@ -652,7 +624,7 @@ export async function dismissVerificationFinding(findingID: number): Promise<Ver
     },
   );
   if (!response.ok) {
-    throw new Error(`dismiss verification finding failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `dismiss verification finding failed with status ${response.status}`));
   }
   return (await response.json()) as VerificationFinding;
 }
@@ -670,7 +642,7 @@ export async function pauseNexusIndexing(
     body: JSON.stringify(request),
   });
   if (!response.ok) {
-    throw new Error(`pause indexing failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `pause indexing failed with status ${response.status}`));
   }
   return (await response.json()) as IndexingControl;
 }
@@ -723,7 +695,15 @@ export async function resumeNexusIndexing(nexusInstanceID: number): Promise<Inde
     credentials: "include",
   });
   if (!response.ok) {
-    throw new Error(`resume indexing failed with status ${response.status}`);
+    throw new Error(await problemMessage(response, `resume indexing failed with status ${response.status}`));
   }
   return (await response.json()) as IndexingControl;
+}
+
+async function problemMessage(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => null);
+  if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
+    return body.message;
+  }
+  return fallback;
 }

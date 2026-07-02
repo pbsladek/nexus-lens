@@ -5,6 +5,7 @@ import {
   cancelCleanupExecution,
   dismissVerificationFinding,
   getAnalyticsOverview,
+  getAdminStatus,
   getHealth,
   getMe,
   getRetentionSettings,
@@ -70,6 +71,7 @@ import {
 import "./styles.css";
 
 type ScanType = StartIndexRunRequest["scan_type"];
+type Theme = "light" | "dark";
 
 const defaultCleanupPolicyYAML = `name: ci-feature-cleanup
 protected:
@@ -87,6 +89,7 @@ candidate_rules:
 `;
 
 function App() {
+  const [theme, setTheme] = useState<Theme>(() => preferredTheme());
   const [apiStatus, setAPIStatus] = useState("checking");
   const [user, setUser] = useState<AppUser | null>(null);
   const [username, setUsername] = useState("admin");
@@ -104,7 +107,7 @@ function App() {
   const [pendingRunRequest, setPendingRunRequest] = useState<StartIndexRunRequest | null>(null);
   const [confirmationText, setConfirmationText] = useState("");
   const [runMessage, setRunMessage] = useState("");
-  const [controlNexusID, setControlNexusID] = useState(1);
+  const [controlNexusID, setControlNexusID] = useState(0);
   const [pauseReason, setPauseReason] = useState("manual pause");
   const [control, setControl] = useState<IndexingControl | null>(null);
   const [findings, setFindings] = useState<VerificationFinding[]>([]);
@@ -156,6 +159,8 @@ function App() {
   const [trendStatus, setTrendStatus] = useState("not loaded");
   const [trendMetricName, setTrendMetricName] = useState("docker_logical_bytes");
   const [trendPatternName, setTrendPatternName] = useState("");
+  const [trendRepositoryID, setTrendRepositoryID] = useState(0);
+  const [trendImageID, setTrendImageID] = useState(0);
   const [trendStartDate, setTrendStartDate] = useState(dateInputValue(30));
   const [trendEndDate, setTrendEndDate] = useState(dateInputValue(0));
   const [trendPoints, setTrendPoints] = useState<TrendPoint[]>([]);
@@ -168,6 +173,7 @@ function App() {
   const [cleanupExecutions, setCleanupExecutions] = useState<CleanupExecution[]>([]);
   const [cleanupEvents, setCleanupEvents] = useState<CleanupExecutionEvent[]>([]);
   const [selectedCleanupExecutionID, setSelectedCleanupExecutionID] = useState(0);
+  const [adminStatus, setAdminStatus] = useState("not checked");
 
   const canManageIndex = hasCapability(user, "manage_index");
   const canManageSettings = hasCapability(user, "manage_settings");
@@ -180,6 +186,12 @@ function App() {
     1,
     ...trendPoints.map((point) => (point.missing ? 0 : point.metric_value ?? 0)),
   );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem("nexus-lens-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     let active = true;
@@ -235,6 +247,7 @@ function App() {
       setCleanupExecutions([]);
       setCleanupEvents([]);
       setSelectedCleanupExecutionID(0);
+      setAdminStatus("signed out");
       setRunsStatus("signed out");
       setFindingsStatus("signed out");
       setSettingsStatus("signed out");
@@ -296,18 +309,30 @@ function App() {
   async function refreshSettings() {
     setSettingsStatus("loading");
     try {
-      const [instanceResponse, scheduleResponse, retentionResponse] = await Promise.all([
+      const [instanceResponse, retentionResponse, adminStatusResponse] = await Promise.all([
         listNexusInstances(100),
-        listIndexingSchedules(controlNexusID > 0 ? controlNexusID : undefined, 100),
         getRetentionSettings(),
+        canManageSettings
+          ? getAdminStatus()
+              .then((response) => response.status)
+              .catch(() => "unavailable")
+          : Promise.resolve("read only"),
       ]);
-      setInstances(instanceResponse.instances ?? []);
+      const instanceRows = instanceResponse.instances ?? [];
+      const selectedNexusID =
+        controlNexusID > 0 ? controlNexusID : instanceRows.length > 0 ? instanceRows[0].id : 0;
+      const scheduleResponse = await listIndexingSchedules(
+        selectedNexusID > 0 ? selectedNexusID : undefined,
+        100,
+      );
+      setInstances(instanceRows);
       setSchedules(scheduleResponse.schedules ?? []);
       applyRetentionSettings(retentionResponse);
-      if ((instanceResponse.instances ?? []).length > 0) {
-        const first = instanceResponse.instances[0];
-        setControlNexusID((current) => (current > 0 ? current : first.id));
-        setAnalyticsNexusID((current) => (current > 0 ? current : first.id));
+      setAdminStatus(adminStatusResponse);
+      if (instanceRows.length > 0) {
+        const first = instanceRows[0];
+        setControlNexusID((current) => (current > 0 ? current : selectedNexusID));
+        setAnalyticsNexusID((current) => (current > 0 ? current : selectedNexusID));
         setNexusName((current) => current || first.name);
         setBaseURL((current) => current || first.base_url);
       }
@@ -315,6 +340,7 @@ function App() {
     } catch {
       setInstances([]);
       setSchedules([]);
+      setAdminStatus("failed");
       setSettingsStatus("failed");
     }
   }
@@ -421,6 +447,8 @@ function App() {
     try {
       const options = {
         nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        repositoryID: trendRepositoryID > 0 ? trendRepositoryID : undefined,
+        imageID: trendImageID > 0 ? trendImageID : undefined,
         metricName: trendMetricName,
         patternName: trendUsesPattern ? trendPatternName || undefined : undefined,
         startDate: trendStartDate || undefined,
@@ -444,6 +472,8 @@ function App() {
   async function applyTrendMoverFilter(mover: TrendTopMover) {
     const repositoryName = mover.repository_name;
     const search = mover.image_name ?? "";
+    setTrendRepositoryID(mover.repository_id);
+    setTrendImageID(mover.image_id ?? 0);
     setAnalyticsRepository(repositoryName);
     setAnalyticsSearch(search);
     setAnalyticsStatus("loading");
@@ -769,9 +799,9 @@ function App() {
   async function handleSaveRateLimits(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const request: RateLimitSettings = {
-      asset_list_rps: positiveNumberOrUndefined(rateAssetListRPS),
-      registry_manifest_rps: positiveNumberOrUndefined(rateRegistryManifestRPS),
-      default_rps: positiveNumberOrUndefined(rateDefaultRPS),
+      asset_list_rps: nonNegativeNumberOrUndefined(rateAssetListRPS),
+      registry_manifest_rps: nonNegativeNumberOrUndefined(rateRegistryManifestRPS),
+      default_rps: nonNegativeNumberOrUndefined(rateDefaultRPS),
     };
     setRunMessage("saving rate limits");
     try {
@@ -842,13 +872,38 @@ function App() {
   }
 
   return (
-    <main className="shell">
-      <header>
-        <h1>Nexus Lens</h1>
-        <div className="status-strip">
-          <span>API: {apiStatus}</span>
-          <span>Session: {authStatus}</span>
+    <>
+      <a className="skip-link" href="#content">
+        Skip to content
+      </a>
+      <main className="shell" id="content">
+      <header className="app-header">
+        <div className="app-title">
+          <p>Nexus Lens</p>
+          <h1>Artifact operations</h1>
         </div>
+        <div className="header-actions" aria-label="Application status and display options">
+          <div className="status-strip" aria-live="polite">
+            <span className={`status-pill ${statusClass(apiStatus)}`}>API: {apiStatus}</span>
+            <span className={`status-pill ${statusClass(authStatus)}`}>Session: {authStatus}</span>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            aria-pressed={theme === "dark"}
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
+        </div>
+        <nav className="section-nav" aria-label="Primary sections">
+          <a href="#overview">Overview</a>
+          <a href="#explorer">Explorer</a>
+          <a href="#patterns">Patterns</a>
+          <a href="#cleanup">Cleanup</a>
+          <a href="#operations">Operations</a>
+          <a href="#settings">Settings</a>
+        </nav>
       </header>
       {user ? (
         <section className="panel">
@@ -884,11 +939,11 @@ function App() {
           </form>
         </section>
       )}
-      <section className="panel stack">
+      <section className="panel stack" id="overview">
         <div className="queue-header">
           <div>
             <h2>Artifact overview</h2>
-            <p>{analyticsStatus}</p>
+            <p className={`panel-status ${statusClass(analyticsStatus)}`}>{analyticsStatus}</p>
           </div>
           <label>
             Nexus ID
@@ -935,11 +990,11 @@ function App() {
           <span>Last successful run: {formatDate(overview?.last_successful_run_at)}</span>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="packages">
         <div className="queue-header">
           <div>
             <h2>Package formats</h2>
-            <p>{packageStatus}</p>
+            <p className={`panel-status ${statusClass(packageStatus)}`}>{packageStatus}</p>
           </div>
           <button type="button" disabled={!user} onClick={refreshPackageFormats}>
             Refresh
@@ -982,11 +1037,11 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="trends">
         <div className="queue-header trend-header">
           <div>
             <h2>Trends</h2>
-            <p>{trendStatus}</p>
+            <p className={`panel-status ${statusClass(trendStatus)}`}>{trendStatus}</p>
           </div>
           <label>
             Metric
@@ -1009,6 +1064,24 @@ function App() {
           </button>
         </div>
         <div className="trend-controls">
+          <label>
+            Repository ID
+            <input
+              min="0"
+              type="number"
+              value={trendRepositoryID}
+              onChange={(event) => setTrendRepositoryID(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Image ID
+            <input
+              min="0"
+              type="number"
+              value={trendImageID}
+              onChange={(event) => setTrendImageID(Number(event.target.value))}
+            />
+          </label>
           <label>
             Start
             <input
@@ -1103,7 +1176,7 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="explorer">
         <div className="queue-header">
           <div>
             <h2>Artifact explorer</h2>
@@ -1264,11 +1337,11 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="patterns">
         <div className="queue-header">
           <div>
             <h2>Tag patterns</h2>
-            <p>{patternStatus}</p>
+            <p className={`panel-status ${statusClass(patternStatus)}`}>{patternStatus}</p>
           </div>
           <label>
             Pattern
@@ -1500,11 +1573,13 @@ function App() {
           </p>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="cleanup">
         <div className="queue-header">
           <div>
             <h2>Cleanup simulation</h2>
-            <p>{cleanupStatus}</p>
+            <p className={`panel-status ${statusClass(cleanupStatus)}`} aria-live="polite">
+              {cleanupStatus}
+            </p>
           </div>
           <button type="button" disabled={!user} onClick={() => setCleanupPolicyYAML(defaultCleanupPolicyYAML)}>
             Reset policy
@@ -1758,10 +1833,10 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel">
+      <section className="panel" id="operations">
         <div>
           <h2>Index operations</h2>
-          <p>{runsStatus}</p>
+          <p className={`panel-status ${statusClass(runsStatus)}`}>{runsStatus}</p>
         </div>
         <button type="button" onClick={refreshRuns} disabled={!user}>
           Refresh
@@ -1839,10 +1914,10 @@ function App() {
               Pause reason
               <input value={pauseReason} onChange={(event) => setPauseReason(event.target.value)} />
             </label>
-            <button type="button" disabled={!canManageIndex} onClick={handlePauseIndexing}>
+            <button type="button" disabled={!canManageIndex || controlNexusID <= 0} onClick={handlePauseIndexing}>
               Pause
             </button>
-            <button type="button" disabled={!canManageIndex} onClick={handleResumeIndexing}>
+            <button type="button" disabled={!canManageIndex || controlNexusID <= 0} onClick={handleResumeIndexing}>
               Resume
             </button>
           </div>
@@ -1852,7 +1927,11 @@ function App() {
               {control.circuit_open_until ? `, circuit open until ${new Date(control.circuit_open_until).toLocaleString()}` : ""}
             </p>
           ) : null}
-          {runMessage ? <p className="run-message">{runMessage}</p> : null}
+          {runMessage ? (
+            <p className="run-message" aria-live="polite">
+              {runMessage}
+            </p>
+          ) : null}
         </section>
       ) : null}
       <section className="panel stack">
@@ -1972,11 +2051,12 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="settings">
         <div className="queue-header">
           <div>
             <h2>Admin settings</h2>
-            <p>{settingsStatus}</p>
+            <p className={`panel-status ${statusClass(settingsStatus)}`}>{settingsStatus}</p>
+            <p>Admin API: {adminStatus}</p>
           </div>
           <button type="button" disabled={!user} onClick={refreshSettings}>
             Refresh
@@ -2060,18 +2140,33 @@ function App() {
         <form className="settings-form" onSubmit={handleSaveRateLimits}>
           <label>
             Asset list RPS
-            <input value={rateAssetListRPS} onChange={(event) => setRateAssetListRPS(event.target.value)} />
+            <input
+              min="0"
+              step="0.1"
+              type="number"
+              value={rateAssetListRPS}
+              onChange={(event) => setRateAssetListRPS(event.target.value)}
+            />
           </label>
           <label>
             Manifest RPS
             <input
+              min="0"
+              step="0.1"
+              type="number"
               value={rateRegistryManifestRPS}
               onChange={(event) => setRateRegistryManifestRPS(event.target.value)}
             />
           </label>
           <label>
             Default RPS
-            <input value={rateDefaultRPS} onChange={(event) => setRateDefaultRPS(event.target.value)} />
+            <input
+              min="0"
+              step="0.1"
+              type="number"
+              value={rateDefaultRPS}
+              onChange={(event) => setRateDefaultRPS(event.target.value)}
+            />
           </label>
           <button type="submit" disabled={!canManageSettings || controlNexusID <= 0}>
             Save rate limits
@@ -2165,11 +2260,11 @@ function App() {
           </table>
         </div>
       </section>
-      <section className="panel stack">
+      <section className="panel stack" id="verification">
         <div className="queue-header">
           <div>
             <h2>Verification findings</h2>
-            <p>{findingsStatus}</p>
+            <p className={`panel-status ${statusClass(findingsStatus)}`}>{findingsStatus}</p>
           </div>
           <button type="button" disabled={!user} onClick={refreshFindings}>
             Refresh
@@ -2256,12 +2351,56 @@ function App() {
         </div>
       ) : null}
     </main>
+    </>
   );
 }
 
-function positiveNumberOrUndefined(value: string): number | undefined {
+function preferredTheme(): Theme {
+  const stored = window.localStorage.getItem("nexus-lens-theme");
+  if (stored === "dark" || stored === "light") {
+    return stored;
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function statusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (
+    normalized.includes("failed") ||
+    normalized.includes("unreachable") ||
+    normalized.includes("invalid") ||
+    normalized.includes("blocked")
+  ) {
+    return "status-bad";
+  }
+  if (
+    normalized.includes("loading") ||
+    normalized.includes("checking") ||
+    normalized.includes("starting") ||
+    normalized.includes("running") ||
+    normalized.includes("requesting") ||
+    normalized.includes("signing")
+  ) {
+    return "status-work";
+  }
+  if (
+    normalized.includes("ok") ||
+    normalized.includes("loaded") ||
+    normalized.includes("signed in") ||
+    normalized.includes("saved") ||
+    normalized.includes("active")
+  ) {
+    return "status-good";
+  }
+  return "status-neutral";
+}
+
+function nonNegativeNumberOrUndefined(value: string): number | undefined {
+  if (value.trim() === "") {
+    return undefined;
+  }
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function dateInputValue(daysAgo: number): string {
