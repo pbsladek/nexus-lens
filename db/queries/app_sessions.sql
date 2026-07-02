@@ -12,9 +12,11 @@ SELECT
   s.expires_at,
   s.revoked_at,
   u.username,
-  u.role
+  u.role,
+  r.capabilities
 FROM app_sessions s
 JOIN app_users u ON u.id = s.user_id
+JOIN app_roles r ON r.name = u.role
 WHERE s.token_hash = $1
   AND s.revoked_at IS NULL
   AND s.expires_at > now()
@@ -30,4 +32,3 @@ WHERE token_hash = $1
 DELETE FROM app_sessions
 WHERE expires_at < now() - interval '7 days'
    OR revoked_at < now() - interval '7 days';
-

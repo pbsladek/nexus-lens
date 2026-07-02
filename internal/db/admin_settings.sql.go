@@ -60,7 +60,13 @@ FROM indexing_schedules s
 JOIN nexus_instances n ON n.id = s.nexus_instance_id
 WHERE ($1::bigint IS NULL OR s.nexus_instance_id = $1::bigint)
 ORDER BY n.name, s.name, s.id
+LIMIT $2
 `
+
+type ListIndexingSchedulesParams struct {
+	NexusInstanceID pgtype.Int8
+	LimitCount      int32
+}
 
 type ListIndexingSchedulesRow struct {
 	ID                   int64
@@ -81,8 +87,8 @@ type ListIndexingSchedulesRow struct {
 	UpdatedAt            pgtype.Timestamptz
 }
 
-func (q *Queries) ListIndexingSchedules(ctx context.Context, nexusInstanceID pgtype.Int8) ([]ListIndexingSchedulesRow, error) {
-	rows, err := q.db.Query(ctx, listIndexingSchedules, nexusInstanceID)
+func (q *Queries) ListIndexingSchedules(ctx context.Context, arg ListIndexingSchedulesParams) ([]ListIndexingSchedulesRow, error) {
+	rows, err := q.db.Query(ctx, listIndexingSchedules, arg.NexusInstanceID, arg.LimitCount)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +128,7 @@ const listNexusInstances = `-- name: ListNexusInstances :many
 SELECT id, name, base_url, created_at, updated_at
 FROM nexus_instances
 ORDER BY name, id
+LIMIT $1
 `
 
 type ListNexusInstancesRow struct {
@@ -132,8 +139,8 @@ type ListNexusInstancesRow struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
-func (q *Queries) ListNexusInstances(ctx context.Context) ([]ListNexusInstancesRow, error) {
-	rows, err := q.db.Query(ctx, listNexusInstances)
+func (q *Queries) ListNexusInstances(ctx context.Context, limitCount int32) ([]ListNexusInstancesRow, error) {
+	rows, err := q.db.Query(ctx, listNexusInstances, limitCount)
 	if err != nil {
 		return nil, err
 	}

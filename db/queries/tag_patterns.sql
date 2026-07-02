@@ -1,7 +1,8 @@
 -- name: ListTagPatterns :many
 SELECT id, name, display_name, description, tag_regex, priority, enabled, built_in, created_at, updated_at
 FROM tag_patterns
-ORDER BY priority, id;
+ORDER BY priority, id
+LIMIT sqlc.arg(limit_count);
 
 -- name: UpsertTagPattern :one
 INSERT INTO tag_patterns (
@@ -87,30 +88,39 @@ SELECT count(*)::bigint AS classified_count
 FROM upserted;
 
 -- name: ListTagPatternAnalytics :many
-WITH active_tags AS (
+WITH scoped_repositories AS (
+  SELECT r.id, r.nexus_instance_id, r.name
+  FROM repositories r
+  WHERE (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
+    AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
+),
+asset_downloads AS (
+  SELECT
+    na.repository_id,
+    na.checksum_sha256,
+    max(na.last_downloaded_at) AS last_downloaded_at
+  FROM nexus_assets na
+  JOIN scoped_repositories sr ON sr.id = na.repository_id
+  WHERE na.checksum_sha256 IS NOT NULL
+    AND na.checksum_sha256 <> ''
+  GROUP BY na.repository_id, na.checksum_sha256
+),
+active_tags AS (
   SELECT
     ct.id AS tag_id,
     ci.repository_id,
-    r.nexus_instance_id,
+    sr.nexus_instance_id,
     COALESCE(ctc.pattern_name, 'unclassified') AS pattern_name,
     dm.logical_size_bytes,
     asset_downloads.last_downloaded_at,
     ct.first_seen_at
   FROM container_tags ct
   JOIN container_images ci ON ci.id = ct.image_id
-  JOIN repositories r ON r.id = ci.repository_id
+  JOIN scoped_repositories sr ON sr.id = ci.repository_id
   LEFT JOIN container_tag_classifications ctc ON ctc.tag_id = ct.id
   LEFT JOIN docker_manifests dm ON dm.repository_id = ci.repository_id AND dm.digest = ct.digest
-  LEFT JOIN (
-    SELECT repository_id, checksum_sha256, max(last_downloaded_at) AS last_downloaded_at
-    FROM nexus_assets
-    WHERE checksum_sha256 IS NOT NULL
-      AND checksum_sha256 <> ''
-    GROUP BY repository_id, checksum_sha256
-  ) asset_downloads ON asset_downloads.repository_id = r.id AND asset_downloads.checksum_sha256 = replace(ct.digest, 'sha256:', '')
+  LEFT JOIN asset_downloads ON asset_downloads.repository_id = sr.id AND asset_downloads.checksum_sha256 = replace(ct.digest, 'sha256:', '')
   WHERE ct.deleted_at IS NULL
-    AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
-    AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
     AND (sqlc.narg(older_than)::timestamptz IS NULL OR ct.first_seen_at < sqlc.narg(older_than)::timestamptz)
     AND (sqlc.narg(never_downloaded)::boolean IS NULL OR sqlc.narg(never_downloaded)::boolean = false OR asset_downloads.last_downloaded_at IS NULL)
 )
@@ -195,10 +205,27 @@ ORDER BY tag_count DESC, tag_shape
 LIMIT sqlc.arg(limit_count);
 
 -- name: ListTagPatternGrowth :many
-WITH active_tags AS (
+WITH scoped_repositories AS (
+  SELECT r.id, r.nexus_instance_id, r.name
+  FROM repositories r
+  WHERE (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
+    AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
+),
+asset_downloads AS (
   SELECT
-    r.nexus_instance_id,
-    r.name AS repository_name,
+    na.repository_id,
+    na.checksum_sha256,
+    max(na.last_downloaded_at) AS last_downloaded_at
+  FROM nexus_assets na
+  JOIN scoped_repositories sr ON sr.id = na.repository_id
+  WHERE na.checksum_sha256 IS NOT NULL
+    AND na.checksum_sha256 <> ''
+  GROUP BY na.repository_id, na.checksum_sha256
+),
+active_tags AS (
+  SELECT
+    sr.nexus_instance_id,
+    sr.name AS repository_name,
     CASE
       WHEN position('/' in ci.name) > 0 THEN split_part(ci.name, '/', 1)
       ELSE '(root)'
@@ -210,19 +237,11 @@ WITH active_tags AS (
     asset_downloads.last_downloaded_at
   FROM container_tags ct
   JOIN container_images ci ON ci.id = ct.image_id
-  JOIN repositories r ON r.id = ci.repository_id
+  JOIN scoped_repositories sr ON sr.id = ci.repository_id
   LEFT JOIN container_tag_classifications ctc ON ctc.tag_id = ct.id
   LEFT JOIN docker_manifests dm ON dm.repository_id = ci.repository_id AND dm.digest = ct.digest
-  LEFT JOIN (
-    SELECT repository_id, checksum_sha256, max(last_downloaded_at) AS last_downloaded_at
-    FROM nexus_assets
-    WHERE checksum_sha256 IS NOT NULL
-      AND checksum_sha256 <> ''
-    GROUP BY repository_id, checksum_sha256
-  ) asset_downloads ON asset_downloads.repository_id = r.id AND asset_downloads.checksum_sha256 = replace(ct.digest, 'sha256:', '')
+  LEFT JOIN asset_downloads ON asset_downloads.repository_id = sr.id AND asset_downloads.checksum_sha256 = replace(ct.digest, 'sha256:', '')
   WHERE ct.deleted_at IS NULL
-    AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
-    AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
     AND (sqlc.narg(pattern_name)::text IS NULL OR COALESCE(ctc.pattern_name, 'unclassified') = sqlc.narg(pattern_name)::text)
     AND (sqlc.narg(never_downloaded)::boolean IS NULL OR sqlc.narg(never_downloaded)::boolean = false OR asset_downloads.last_downloaded_at IS NULL)
 )

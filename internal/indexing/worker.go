@@ -19,27 +19,44 @@ import (
 )
 
 type Worker struct {
-	queries      *db.Queries
-	logger       *slog.Logger
-	workerID     string
-	workerPod    string
-	nexusUser    string
-	nexusPass    string
-	batchSize    int32
-	lease        time.Duration
-	pollInterval time.Duration
-	limiter      *rateLimiter
+	queries                   *db.Queries
+	logger                    *slog.Logger
+	workerID                  string
+	workerPod                 string
+	nexusUser                 string
+	nexusPass                 string
+	destructiveCleanupEnabled bool
+	cleanupDeleteRPS          float64
+	cleanupMaintenanceStart   string
+	cleanupMaintenanceEnd     string
+	retentionSettings         RetentionSettings
+	lastRetentionAt           time.Time
+	batchSize                 int32
+	lease                     time.Duration
+	pollInterval              time.Duration
+	limiter                   *rateLimiter
 }
 
 type WorkerOption func(*Worker)
 
 func NewWorker(queries *db.Queries, logger *slog.Logger, opts ...WorkerOption) *Worker {
 	w := &Worker{
-		queries:      queries,
-		logger:       logger,
-		workerID:     workerID(),
-		nexusUser:    os.Getenv("NEXUS_LENS_NEXUS_USERNAME"),
-		nexusPass:    envOrFile("NEXUS_LENS_NEXUS_PASSWORD", "NEXUS_LENS_NEXUS_PASSWORD_FILE"),
+		queries:                   queries,
+		logger:                    logger,
+		workerID:                  workerID(),
+		nexusUser:                 os.Getenv("NEXUS_LENS_NEXUS_USERNAME"),
+		nexusPass:                 envOrFile("NEXUS_LENS_NEXUS_PASSWORD", "NEXUS_LENS_NEXUS_PASSWORD_FILE"),
+		destructiveCleanupEnabled: envBool("NEXUS_LENS_ENABLE_DESTRUCTIVE_CLEANUP", false),
+		cleanupDeleteRPS:          envFloat("NEXUS_LENS_CLEANUP_DELETE_RPS", 0.5),
+		cleanupMaintenanceStart:   os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_START_UTC"),
+		cleanupMaintenanceEnd:     os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_END_UTC"),
+		retentionSettings: RetentionSettings{
+			IntervalSeconds:         envInt("NEXUS_LENS_RETENTION_INTERVAL_SECONDS", 3600),
+			ScanRunDays:             envInt("NEXUS_LENS_RETENTION_SCAN_RUN_DAYS", 30),
+			CleanupExecutionDays:    envInt("NEXUS_LENS_RETENTION_CLEANUP_EXECUTION_DAYS", 365),
+			VerificationFindingDays: envInt("NEXUS_LENS_RETENTION_VERIFICATION_FINDING_DAYS", 180),
+			TrendSnapshotDays:       envInt("NEXUS_LENS_RETENTION_TREND_SNAPSHOT_DAYS", 365),
+		},
 		batchSize:    DefaultWorkerBatchSize,
 		lease:        DefaultWorkerLease,
 		pollInterval: DefaultWorkerPollPeriod,
@@ -119,6 +136,29 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	if scheduleResult.Processed > 0 {
 		w.logger.Info("scheduler tick processed", "processed", scheduleResult.Processed, "enqueued", scheduleResult.Enqueued, "skipped", scheduleResult.Skipped)
 	}
+	retentionProcessed, err := w.applyRetentionIfDue(ctx, scheduler)
+	if err != nil {
+		return scheduleResult.Processed, err
+	}
+
+	cleanupProcessed := 0
+	if w.destructiveCleanupEnabled {
+		processedCleanup, err := scheduler.ProcessNextCleanupExecution(ctx, CleanupExecutionProcessRequest{
+			NexusUsername:          w.nexusUser,
+			NexusPassword:          w.nexusPass,
+			DeleteRPS:              w.cleanupDeleteRPS,
+			MaintenanceWindowStart: w.cleanupMaintenanceStart,
+			MaintenanceWindowEnd:   w.cleanupMaintenanceEnd,
+			LeaseSeconds:           int32(w.lease.Seconds()),
+			WorkerID:               w.workerID,
+		})
+		if err != nil {
+			return scheduleResult.Processed, fmt.Errorf("process cleanup execution: %w", err)
+		}
+		if processedCleanup {
+			cleanupProcessed = 1
+		}
+	}
 
 	reclaimed, err := w.queries.ReclaimExpiredScanTasks(ctx)
 	if err != nil {
@@ -146,7 +186,37 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	for _, task := range claimed {
 		w.processClaimedTask(ctx, task)
 	}
-	return scheduleResult.Processed + len(reclaimed) + len(claimed), nil
+	return scheduleResult.Processed + retentionProcessed + cleanupProcessed + len(reclaimed) + len(claimed), nil
+}
+
+func (w *Worker) applyRetentionIfDue(ctx context.Context, scheduler *Service) (int, error) {
+	settings, err := scheduler.GetRetentionSettings(ctx, w.retentionSettings)
+	if err != nil {
+		return 0, err
+	}
+	retentionInterval := time.Duration(settings.IntervalSeconds) * time.Second
+	if retentionInterval <= 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	if !w.lastRetentionAt.IsZero() && now.Sub(w.lastRetentionAt) < retentionInterval {
+		return 0, nil
+	}
+	result, err := scheduler.ApplyRetention(ctx, settings, now)
+	if err != nil {
+		return 0, fmt.Errorf("apply retention: %w", err)
+	}
+	w.lastRetentionAt = now
+	w.logger.Info("retention applied",
+		"deleted_scan_runs", result.DeletedScanRuns,
+		"deleted_cleanup_executions", result.DeletedCleanupExecutions,
+		"deleted_verification_findings", result.DeletedVerificationFindings,
+		"deleted_trend_snapshots", result.DeletedTrendSnapshots,
+	)
+	if result.DeletedScanRuns+result.DeletedCleanupExecutions+result.DeletedVerificationFindings+result.DeletedTrendSnapshots == 0 {
+		return 0, nil
+	}
+	return 1, nil
 }
 
 func (w *Worker) processClaimedTask(ctx context.Context, task db.ScanTask) {
@@ -192,6 +262,8 @@ func (w *Worker) executeTask(ctx context.Context, task db.ScanTask) *TaskError {
 		return w.discoverRepositories(ctx, task)
 	case TaskTypeDockerTagScan:
 		return w.scanDockerTags(ctx, task)
+	case TaskTypePackageAssetScan:
+		return w.scanPackageAssets(ctx, task)
 	case TaskTypeManifestFetchBatch:
 		return w.fetchManifestBatch(ctx, task)
 	case TaskTypeVerificationChecks:
@@ -364,6 +436,7 @@ func (w *Worker) discoverRepositories(ctx context.Context, task db.ScanTask) *Ta
 		return classifyUpstreamError("list repositories", "nexus_repository_list", err)
 	}
 	hostedDocker := 0
+	hostedPackage := 0
 	unsupported := 0
 	for _, repo := range repos {
 		if !repositoryAllowed(repo.Name, payload.Scope) {
@@ -371,6 +444,8 @@ func (w *Worker) discoverRepositories(ctx context.Context, task db.ScanTask) *Ta
 		}
 		if repo.Format == "docker" && repo.Type == "hosted" {
 			hostedDocker++
+		} else if repo.Type == "hosted" && packageAssetIndexFormat(repo.Format) {
+			hostedPackage++
 		} else {
 			unsupported++
 		}
@@ -387,7 +462,7 @@ func (w *Worker) discoverRepositories(ctx context.Context, task db.ScanTask) *Ta
 			Online:          online,
 			Metadata: jsonBytes(map[string]any{
 				"attributes":         repo.Attributes,
-				"supported_in_v1":    repo.Format == "docker" && repo.Type == "hosted",
+				"supported_in_v1":    repo.Type == "hosted" && (repo.Format == "docker" || packageAssetIndexFormat(repo.Format)),
 				"unsupported_reason": unsupportedReason(repo),
 			}),
 		})
@@ -415,9 +490,93 @@ func (w *Worker) discoverRepositories(ctx context.Context, task db.ScanTask) *Ta
 			}); err != nil {
 				return &TaskError{Code: "postgres_task_enqueue_failed", Class: "postgres", Message: err.Error(), Retryable: true}
 			}
+		} else if repo.Type == "hosted" && packageAssetIndexFormat(repo.Format) {
+			if _, err := w.queries.EnqueueScanTask(ctx, db.EnqueueScanTaskParams{
+				ScanRunID:       task.ScanRunID,
+				NexusInstanceID: task.NexusInstanceID,
+				TaskType:        TaskTypePackageAssetScan,
+				TaskKey:         "package-asset-scan/" + repo.Name,
+				RepositoryName:  textRequired(repo.Name),
+				Subject:         textRequired(repo.Name),
+				CostClass:       "asset_list",
+				Priority:        0,
+				MaxAttempts:     3,
+				Payload: jsonBytes(map[string]any{
+					"base_url":        payload.BaseURL,
+					"repository_id":   repositoryRow.ID,
+					"repository_name": repo.Name,
+					"format":          repo.Format,
+					"scope":           payload.Scope,
+				}),
+			}); err != nil {
+				return &TaskError{Code: "postgres_task_enqueue_failed", Class: "postgres", Message: err.Error(), Retryable: true}
+			}
 		}
 	}
-	w.logger.Info("repositories discovered", "task_id", task.ID, "scan_run_id", task.ScanRunID, "repositories", len(repos), "hosted_docker", hostedDocker, "unsupported", unsupported)
+	w.logger.Info("repositories discovered", "task_id", task.ID, "scan_run_id", task.ScanRunID, "repositories", len(repos), "hosted_docker", hostedDocker, "hosted_package", hostedPackage, "unsupported", unsupported)
+	return nil
+}
+
+func (w *Worker) scanPackageAssets(ctx context.Context, task db.ScanTask) *TaskError {
+	var payload struct {
+		BaseURL        string    `json:"base_url"`
+		RepositoryID   int64     `json:"repository_id"`
+		RepositoryName string    `json:"repository_name"`
+		Format         string    `json:"format"`
+		Scope          taskScope `json:"scope"`
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		return &TaskError{Code: "invalid_task_payload", Class: "worker", Message: err.Error(), Retryable: false}
+	}
+	if payload.RepositoryID == 0 || payload.RepositoryName == "" || !packageAssetIndexFormat(payload.Format) {
+		return &TaskError{Code: "invalid_task_payload", Class: "worker", Message: "repository_id, repository_name, and supported package format are required", Retryable: false}
+	}
+	client, err := nexus.NewClient(payload.BaseURL, w.nexusUser, w.nexusPass)
+	if err != nil {
+		return &TaskError{Code: "invalid_nexus_config", Class: "config", Message: err.Error(), Retryable: false}
+	}
+
+	indexed := 0
+	pages := 0
+	skippedOutsideWindow := 0
+	skippedMissingTimestamp := 0
+	since, hasSince := scopeSince(payload.Scope)
+	continuationToken := ""
+	for {
+		if err := w.waitForRateLimit(ctx, task); err != nil {
+			return rateLimitError(task.CostClass, err)
+		}
+		page, err := client.ListAssets(ctx, payload.RepositoryName, continuationToken)
+		if err != nil {
+			return classifyUpstreamError("list assets", "nexus_assets_list", err)
+		}
+		pages++
+		for _, asset := range page.Items {
+			if taskErr := w.upsertNexusAsset(ctx, payload.RepositoryID, asset); taskErr != nil {
+				return taskErr
+			}
+			if hasSince {
+				inWindow, hasTimestamp := assetChangedSince(asset, since)
+				if !hasTimestamp {
+					skippedMissingTimestamp++
+					continue
+				}
+				if !inWindow {
+					skippedOutsideWindow++
+					continue
+				}
+			}
+			if taskErr := w.upsertGenericArtifact(ctx, payload.RepositoryID, payload.Format, asset); taskErr != nil {
+				return taskErr
+			}
+			indexed++
+		}
+		if page.ContinuationToken == "" {
+			break
+		}
+		continuationToken = page.ContinuationToken
+	}
+	w.logger.Info("package assets indexed", "task_id", task.ID, "scan_run_id", task.ScanRunID, "repository", payload.RepositoryName, "format", payload.Format, "pages", pages, "assets", indexed, "skipped_outside_window", skippedOutsideWindow, "skipped_missing_timestamp", skippedMissingTimestamp)
 	return nil
 }
 
@@ -573,6 +732,112 @@ func (w *Worker) upsertNexusAsset(ctx context.Context, repositoryID int64, asset
 		return &TaskError{Code: "postgres_asset_upsert_failed", Class: "postgres", Message: err.Error(), Retryable: true}
 	}
 	return nil
+}
+
+func (w *Worker) upsertGenericArtifact(ctx context.Context, repositoryID int64, format string, asset nexus.Asset) *TaskError {
+	artifact := genericArtifactFromAsset(format, asset)
+	if artifact.Name == "" {
+		return nil
+	}
+	if _, err := w.queries.UpsertGenericArtifact(ctx, db.UpsertGenericArtifactParams{
+		RepositoryID:   repositoryID,
+		Format:         format,
+		Namespace:      textRequired(artifact.Namespace),
+		Name:           artifact.Name,
+		Version:        textRequired(artifact.Version),
+		Path:           textRequired(asset.Path),
+		SizeBytes:      int8(asset.FileSize, true),
+		ChecksumSha256: text(asset.Checksum.SHA256),
+		Metadata: jsonBytes(map[string]any{
+			"nexus_asset_id":   asset.ID,
+			"repository":       asset.Repository,
+			"download_url":     asset.DownloadURL,
+			"content_type":     asset.ContentType,
+			"last_modified":    asset.LastModified,
+			"last_downloaded":  asset.LastDownloaded,
+			"blob_created":     asset.BlobCreated,
+			"blob_store_name":  asset.BlobStoreName,
+			"checksum_sha1":    asset.Checksum.SHA1,
+			"parser":           artifact.Parser,
+			"identity_quality": artifact.IdentityQuality,
+		}),
+	}); err != nil {
+		return &TaskError{Code: "postgres_generic_artifact_upsert_failed", Class: "postgres", Message: err.Error(), Retryable: true}
+	}
+	return nil
+}
+
+type genericArtifactIdentity struct {
+	Namespace       string
+	Name            string
+	Version         string
+	Parser          string
+	IdentityQuality string
+}
+
+func genericArtifactFromAsset(format string, asset nexus.Asset) genericArtifactIdentity {
+	path := strings.Trim(asset.Path, "/")
+	if path == "" {
+		return genericArtifactIdentity{}
+	}
+	parts := strings.Split(path, "/")
+	switch format {
+	case "npm":
+		return npmArtifactIdentity(parts, path)
+	case "pypi":
+		return pypiArtifactIdentity(parts, path)
+	case "go":
+		return goArtifactIdentity(parts, path)
+	default:
+		return genericArtifactIdentity{Name: path, Parser: "path", IdentityQuality: "path_only"}
+	}
+}
+
+func npmArtifactIdentity(parts []string, path string) genericArtifactIdentity {
+	if len(parts) >= 4 && strings.HasPrefix(parts[0], "@") && parts[2] == "-" {
+		return genericArtifactIdentity{Namespace: parts[0], Name: parts[1], Version: versionFromFilename(parts[len(parts)-1], parts[1]), Parser: "npm-scoped-tarball", IdentityQuality: "parsed"}
+	}
+	if len(parts) >= 3 && parts[1] == "-" {
+		name := parts[0]
+		return genericArtifactIdentity{Name: name, Version: versionFromFilename(parts[len(parts)-1], name), Parser: "npm-tarball", IdentityQuality: "parsed"}
+	}
+	return genericArtifactIdentity{Name: path, Parser: "npm-path", IdentityQuality: "path_only"}
+}
+
+func pypiArtifactIdentity(parts []string, path string) genericArtifactIdentity {
+	filename := parts[len(parts)-1]
+	name := strings.TrimSuffix(filename, ".tar.gz")
+	name = strings.TrimSuffix(name, ".zip")
+	name = strings.TrimSuffix(name, ".whl")
+	version := ""
+	if split := strings.Split(name, "-"); len(split) >= 2 {
+		name = split[0]
+		version = split[1]
+	}
+	if name == "" {
+		name = path
+	}
+	return genericArtifactIdentity{Name: name, Version: version, Parser: "pypi-filename", IdentityQuality: "parsed"}
+}
+
+func goArtifactIdentity(parts []string, path string) genericArtifactIdentity {
+	if len(parts) >= 3 && parts[len(parts)-2] == "@v" {
+		module := strings.Join(parts[:len(parts)-2], "/")
+		version := strings.TrimSuffix(parts[len(parts)-1], ".zip")
+		version = strings.TrimSuffix(version, ".mod")
+		version = strings.TrimSuffix(version, ".info")
+		return genericArtifactIdentity{Name: module, Version: version, Parser: "go-module-path", IdentityQuality: "parsed"}
+	}
+	return genericArtifactIdentity{Name: path, Parser: "go-path", IdentityQuality: "path_only"}
+}
+
+func versionFromFilename(filename, packageName string) string {
+	filename = strings.TrimSuffix(filename, ".tgz")
+	prefix := packageName + "-"
+	if strings.HasPrefix(filename, prefix) {
+		return strings.TrimPrefix(filename, prefix)
+	}
+	return ""
 }
 
 func dockerTagFromAssetPath(path string) (string, string, bool) {
@@ -825,10 +1090,17 @@ func unsupportedReason(repo nexus.Repository) string {
 	if repo.Format == "docker" && repo.Type == "hosted" {
 		return ""
 	}
+	if repo.Type == "hosted" && packageAssetIndexFormat(repo.Format) {
+		return ""
+	}
 	if repo.Type != "hosted" {
 		return "repository is not hosted"
 	}
-	return "repository format is not docker"
+	return "repository format " + repo.Format + " is not supported yet"
+}
+
+func packageAssetIndexFormat(format string) bool {
+	return format == "pypi" || format == "npm" || format == "go"
 }
 
 func (w *Worker) completeTask(ctx context.Context, task db.ScanTask, attemptID int64) error {

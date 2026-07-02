@@ -36,7 +36,7 @@ Out of v1:
 - No Redis, Valkey, or external task queue.
 - No webhook receiver/storage/API.
 - No blob-store disk or object-store scanning.
-- No cleanup execution.
+- No automatic cleanup execution. Optional destructive cleanup execution is disabled by default and requires explicit admin approval.
 - No deep Nexus component model for Docker.
 
 ## Simplified V1 Index Model
@@ -285,7 +285,7 @@ These can be added after v1 without changing the core source-of-truth model:
 - Webhook-assisted candidate discovery.
 - Non-Docker format indexers.
 - Generic artifact/package model.
-- Cleanup policy simulation.
-- Destructive cleanup execution.
+- Richer cleanup policy language and cleanup previews.
+- Separate read-only and executor Nexus credentials.
 - Cross-repository digest cache.
 - Materialized views for expensive dashboards.

@@ -3,11 +3,11 @@ kind: Service
 metadata:
   name: {{ include "nexus-lens.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+    {{- include "nexus-lens.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
   selector:
-    app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+    {{- include "nexus-lens.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: api
   ports:
     - name: http

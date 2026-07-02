@@ -7,7 +7,75 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const countCleanupExecutionEvents24h = `-- name: CountCleanupExecutionEvents24h :many
+SELECT event_type, status, count(*)::bigint AS count
+FROM cleanup_execution_events
+WHERE created_at >= now() - interval '24 hours'
+GROUP BY event_type, status
+ORDER BY event_type, status
+`
+
+type CountCleanupExecutionEvents24hRow struct {
+	EventType string
+	Status    pgtype.Text
+	Count     int64
+}
+
+func (q *Queries) CountCleanupExecutionEvents24h(ctx context.Context) ([]CountCleanupExecutionEvents24hRow, error) {
+	rows, err := q.db.Query(ctx, countCleanupExecutionEvents24h)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountCleanupExecutionEvents24hRow
+	for rows.Next() {
+		var i CountCleanupExecutionEvents24hRow
+		if err := rows.Scan(&i.EventType, &i.Status, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countCleanupExecutionsByStatus = `-- name: CountCleanupExecutionsByStatus :many
+SELECT status, count(*)::bigint AS count
+FROM cleanup_executions
+GROUP BY status
+ORDER BY status
+`
+
+type CountCleanupExecutionsByStatusRow struct {
+	Status string
+	Count  int64
+}
+
+func (q *Queries) CountCleanupExecutionsByStatus(ctx context.Context) ([]CountCleanupExecutionsByStatusRow, error) {
+	rows, err := q.db.Query(ctx, countCleanupExecutionsByStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountCleanupExecutionsByStatusRow
+	for rows.Next() {
+		var i CountCleanupExecutionsByStatusRow
+		if err := rows.Scan(&i.Status, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const countOpenVerificationFindingsBySeverity = `-- name: CountOpenVerificationFindingsBySeverity :many
 SELECT severity, count(*)::bigint AS count
@@ -115,6 +183,20 @@ WHERE status IN ('pending', 'retryable')
 
 func (q *Queries) GetOldestPendingTaskAgeSeconds(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, getOldestPendingTaskAgeSeconds)
+	var age_seconds int64
+	err := row.Scan(&age_seconds)
+	return age_seconds, err
+}
+
+const getOldestRunningCleanupAgeSeconds = `-- name: GetOldestRunningCleanupAgeSeconds :one
+SELECT COALESCE(EXTRACT(EPOCH FROM now() - MIN(started_at)), 0)::bigint AS age_seconds
+FROM cleanup_executions
+WHERE status IN ('running', 'cancel_requested')
+  AND started_at IS NOT NULL
+`
+
+func (q *Queries) GetOldestRunningCleanupAgeSeconds(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, getOldestRunningCleanupAgeSeconds)
 	var age_seconds int64
 	err := row.Scan(&age_seconds)
 	return age_seconds, err

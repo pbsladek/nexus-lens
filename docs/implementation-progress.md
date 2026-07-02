@@ -4,7 +4,7 @@ This file tracks implementation progress against the phased plan in `docs/nexus-
 
 ## Current Phase
 
-All planned phases are complete through Phase 10: Controlled execution.
+All planned phases are complete through Phase 10: Controlled execution. Important-improvement hardening is in progress across cleanup execution, retention, observability, API contract coverage, and production operations documentation.
 
 ## Completed
 
@@ -87,7 +87,7 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] Added Phase 8 read-only cleanup policy YAML simulation with protected tag rules, tag-pattern candidate rules, warning rows, and exportable JSON results.
 - [x] Added cleanup simulation API/UI coverage for validation errors, simulation execution, candidate rows, protected rows, warnings, and explorer filter links.
 - [x] Added Phase 9 generic artifact schema preparation for future package format indexers.
-- [x] Added package repository discover-only API/UI for hosted PyPI, npm, and Go repositories, while marking Docker as indexed and unsupported/proxy/group repositories as skipped or unsupported.
+- [x] Added generic package asset indexing for hosted PyPI, npm, and Go repositories using the Nexus Assets API and `generic_artifacts`, while marking Docker as graph-indexed and unsupported/proxy/group repositories as skipped or unsupported.
 - [x] Added Phase 10 cleanup execution audit schema and admin-only approval endpoint tied to a fresh simulation.
 - [x] Kept destructive cleanup execution disabled by default with explicit read-only blocked audit records.
 - [x] Added controlled execution UI approval controls and Playwright coverage for blocked read-only execution requests.
@@ -96,6 +96,22 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] Added immediate local tag deletion marking after a successful Nexus component delete so active analytics reflect destructive cleanup without waiting for a later reconcile.
 - [x] Added post-delete verification run scheduling and `cleanup_executions.post_delete_verification_run_id` audit linkage.
 - [x] Added Helm values/schema and deployment wiring for optional user-managed Nexus credential Secret refs and cleanup execution controls.
+- [x] Added async cleanup execution schema for approved candidate snapshots, worker leases, cancellation requests, cleanup execution events, and per-Nexus cleanup locks.
+- [x] Added worker-side async cleanup execution processing with lease refresh, cancellation checks, exact candidate replay, stronger digest/component preconditions, post-delete reconcile, and normalized event logging.
+- [x] Added cleanup execution list, event-list, and cancel APIs plus frontend controls for long-running cleanup operations.
+- [x] Added cleanup execution Prometheus metrics and Helm alert rules for stuck or failed cleanup execution.
+- [x] Added configurable worker retention for terminal scan runs, terminal cleanup executions, closed verification findings, and daily trend snapshots.
+- [x] Added PostgreSQL-backed retention settings overrides with Admin UI editing and worker-side runtime reload.
+- [x] Added targeted PostgreSQL indexes for recent run/task lists, retention cutoffs, cleanup lease recovery, and closed verification finding retention.
+- [x] Added performance-review indexes for Nexus asset checksum download rollups, active tag scans, and hosted repository filtering.
+- [x] Scoped interactive analytics, package repository, tag-pattern, and cleanup-simulation rollups so Nexus asset and Docker row aggregation happens after Nexus/repository filtering.
+- [x] Pushed config-list limits for Nexus instances, indexing schedules, and tag patterns into SQL instead of trimming rows in Go.
+- [x] Added role-derived API capabilities and UI gating for index management, settings, tag-pattern management, finding management, and cleanup execution.
+- [x] Added PostgreSQL-backed app roles with persisted capability lists while keeping seeded `admin` and `read_only` defaults.
+- [x] Added consistent optional `limit` parameters across list-style API endpoints, including config lists for Nexus instances, schedules, and tag patterns.
+- [x] Added production operations guidance for PostgreSQL backups/restores, retention, query/index review, and observability.
+- [x] Added scale fixture contract for larger Docker Compose Nexus seeds while keeping the default fixture CI-friendly.
+- [x] Added `make e2e-live-cleanup` to run the seeded destructive cleanup flow end to end with API, worker, Nexus registry, and PostgreSQL assertions.
 
 ## Validation
 
@@ -118,6 +134,7 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] `make openapi`
 - [x] `make sqlc`
 - [x] `make migrate`
+- [x] Migration 18 applied locally and seeded `app_roles` with expected capability arrays.
 - [x] `make test`
 - [x] `make typecheck`
 - [x] `npm run build`
@@ -213,6 +230,7 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] Live destructive cleanup against seeded Nexus deleted `docker-hosted-a/nexus-lens/app:pr-123`, removed the Nexus component, and enqueued successful verification run 53.
 - [x] Live destructive cleanup against seeded Nexus after local index marking fix deleted `docker-hosted-a/nexus-lens/app:a1b2c3d`, removed the Nexus component, removed the active analytics row immediately, and enqueued successful verification run 54.
 - [x] Live scoped `full_reconcile` run 55 completed successfully for `docker-hosted-a` and confirmed both live-deleted seeded tags are absent from active analytics.
+- [x] Live async cleanup execution 7 against the seeded Nexus deleted `docker-hosted-a/nexus-lens/app:pr-123`, wrote normalized cleanup events, marked the local tag deleted, removed the tag from the registry tag list, and linked successful post-delete verification run 73 plus full reconcile run 74.
 - [x] Unit tests cover Nexus Docker component search parameters, continuation tokens, component delete paths, cleanup maintenance-window checks, and exact one-component match enforcement.
 - [x] `go test ./...`
 - [x] `make typecheck`
@@ -221,6 +239,8 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] `make helm-template`
 - [x] `helm template nexus-lens ./charts/nexus-lens --set nexus.credentials.existingSecret=nexus-auth --set cleanup.destructiveExecution.enabled=true --set cleanup.destructiveExecution.maintenanceWindowUTC.start=01:00 --set cleanup.destructiveExecution.maintenanceWindowUTC.end=03:00`
 - [x] `make compose-config`
+- [x] `make e2e-live-cleanup`
+- [x] Live cleanup E2E run 2026-06-28: scoped full reconcile run 76, cleanup execution 8, post-delete verification run 77, and post-delete reconcile run 78 all succeeded.
 
 ## Implementation Checklist
 
@@ -285,7 +305,7 @@ All planned phases are complete through Phase 10: Controlled execution.
 - [x] Add Phase 8 read-only simulation engine with protected and candidate rules.
 - [x] Add Phase 8 simulator UI with validation errors and candidate/protected/warning tables.
 - [x] Add generic artifact model preparation for hosted PyPI, npm, and Go module formats.
-- [x] Add discover-only views for unsupported hosted package formats.
+- [x] Add generic asset-indexed views for hosted PyPI, npm, and Go module formats.
 - [x] Verify Docker/OCI analytics remain unchanged.
 - [x] Add execution approval workflow tied to prior cleanup simulations.
 - [x] Add audit log for cleanup execution requests.

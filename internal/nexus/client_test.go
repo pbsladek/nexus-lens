@@ -3,9 +3,13 @@ package nexus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/pbsladek/nexus-lens/internal/upstream"
 )
 
 func TestSearchDockerComponentsUsesNexusSearchParameters(t *testing.T) {
@@ -106,4 +110,98 @@ func TestDeleteComponentRequiresNoContent(t *testing.T) {
 	if deletedPath != "/service/rest/v1/components/component%2Fid" {
 		t.Fatalf("unexpected delete path %q", deletedPath)
 	}
+}
+
+func TestListAssetsUsesRepositoryContinuationAndAuth(t *testing.T) {
+	var seenToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/service/rest/v1/assets" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			t.Fatalf("missing basic auth")
+		}
+		if got := r.URL.Query().Get("repository"); got != "npm-hosted" {
+			t.Fatalf("repository = %q", got)
+		}
+		seenToken = r.URL.Query().Get("continuationToken")
+		_ = json.NewEncoder(w).Encode(AssetsPage{
+			ContinuationToken: "next",
+			Items: []Asset{{
+				ID:       "asset-1",
+				Path:     "left-pad/-/left-pad-1.3.0.tgz",
+				FileSize: 123,
+			}},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "admin", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ListAssets(context.Background(), "npm-hosted", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenToken != "token-1" || page.ContinuationToken != "next" || len(page.Items) != 1 {
+		t.Fatalf("seenToken=%q page=%+v", seenToken, page)
+	}
+}
+
+func TestNexusClientHTTPAndDecodeErrors(t *testing.T) {
+	t.Run("repository http error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+		}))
+		defer server.Close()
+
+		client, err := NewClient(server.URL, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.ListRepositories(context.Background())
+		httpErr := &upstream.HTTPError{}
+		if !errorAsHTTP(err, &httpErr) || httpErr.StatusCode != http.StatusTooManyRequests || httpErr.RetryAfter == 0 {
+			t.Fatalf("err = %#v from %v", httpErr, err)
+		}
+	})
+
+	t.Run("assets bad json", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("{"))
+		}))
+		defer server.Close()
+
+		client, err := NewClient(server.URL, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ListAssets(context.Background(), "repo", ""); err == nil ||
+			!strings.Contains(err.Error(), "decode nexus assets") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("delete status error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", http.StatusForbidden)
+		}))
+		defer server.Close()
+
+		client, err := NewClient(server.URL, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpErr := &upstream.HTTPError{}
+		if err := client.DeleteComponent(context.Background(), "component-1"); !errorAsHTTP(err, &httpErr) || httpErr.StatusCode != http.StatusForbidden {
+			t.Fatalf("err = %#v from %v", httpErr, err)
+		}
+	})
+}
+
+func errorAsHTTP(err error, target **upstream.HTTPError) bool {
+	return errors.As(err, target)
 }

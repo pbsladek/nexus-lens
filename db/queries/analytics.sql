@@ -49,11 +49,20 @@ SELECT
 FROM asset_totals, layer_totals, latest_success;
 
 -- name: ListRepositoryAnalytics :many
-WITH image_counts AS (
+WITH docker_repositories AS (
+  SELECT r.id, r.nexus_instance_id, r.name, r.last_seen_at
+  FROM repositories r
+  WHERE r.format = 'docker'
+    AND r.type = 'hosted'
+    AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
+    AND (sqlc.narg(search)::text IS NULL OR r.name ILIKE '%' || sqlc.narg(search)::text || '%')
+),
+image_counts AS (
   SELECT
     ci.repository_id,
     count(ci.id)::bigint AS image_count
   FROM container_images ci
+  JOIN docker_repositories dr ON dr.id = ci.repository_id
   GROUP BY ci.repository_id
 ),
 tag_rollup AS (
@@ -62,53 +71,67 @@ tag_rollup AS (
     count(ct.id)::bigint AS active_tag_count,
     COALESCE(sum(dm.logical_size_bytes), 0)::bigint AS docker_logical_bytes
   FROM container_images ci
+  JOIN docker_repositories dr ON dr.id = ci.repository_id
   LEFT JOIN container_tags ct ON ct.image_id = ci.id AND ct.deleted_at IS NULL
   LEFT JOIN docker_manifests dm ON dm.repository_id = ci.repository_id AND dm.digest = ct.digest
   GROUP BY ci.repository_id
 ),
 asset_totals AS (
-  SELECT repository_id, COALESCE(sum(size_bytes), 0)::bigint AS nexus_asset_bytes
-  FROM nexus_assets
-  GROUP BY repository_id
+  SELECT na.repository_id, COALESCE(sum(na.size_bytes), 0)::bigint AS nexus_asset_bytes
+  FROM nexus_assets na
+  JOIN docker_repositories dr ON dr.id = na.repository_id
+  GROUP BY na.repository_id
 ),
 layer_totals AS (
-  SELECT repository_id, COALESCE(sum(size_bytes), 0)::bigint AS docker_unique_layer_bytes
-  FROM docker_layers
-  GROUP BY repository_id
+  SELECT dl.repository_id, COALESCE(sum(dl.size_bytes), 0)::bigint AS docker_unique_layer_bytes
+  FROM docker_layers dl
+  JOIN docker_repositories dr ON dr.id = dl.repository_id
+  GROUP BY dl.repository_id
 )
 SELECT
-  r.id AS repository_id,
-  r.nexus_instance_id,
+  dr.id AS repository_id,
+  dr.nexus_instance_id,
   n.name AS nexus_name,
-  r.name AS repository_name,
+  dr.name AS repository_name,
   COALESCE(image_counts.image_count, 0)::bigint AS image_count,
   COALESCE(tag_rollup.active_tag_count, 0)::bigint AS active_tag_count,
   COALESCE(asset_totals.nexus_asset_bytes, 0)::bigint AS nexus_asset_bytes,
   COALESCE(tag_rollup.docker_logical_bytes, 0)::bigint AS docker_logical_bytes,
   COALESCE(layer_totals.docker_unique_layer_bytes, 0)::bigint AS docker_unique_layer_bytes,
-  r.last_seen_at
-FROM repositories r
-JOIN nexus_instances n ON n.id = r.nexus_instance_id
-LEFT JOIN image_counts ON image_counts.repository_id = r.id
-LEFT JOIN tag_rollup ON tag_rollup.repository_id = r.id
-LEFT JOIN asset_totals ON asset_totals.repository_id = r.id
-LEFT JOIN layer_totals ON layer_totals.repository_id = r.id
-WHERE r.format = 'docker'
-  AND r.type = 'hosted'
-  AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
-  AND (sqlc.narg(search)::text IS NULL OR r.name ILIKE '%' || sqlc.narg(search)::text || '%')
-ORDER BY nexus_asset_bytes DESC, docker_logical_bytes DESC, r.id
+  dr.last_seen_at
+FROM docker_repositories dr
+JOIN nexus_instances n ON n.id = dr.nexus_instance_id
+LEFT JOIN image_counts ON image_counts.repository_id = dr.id
+LEFT JOIN tag_rollup ON tag_rollup.repository_id = dr.id
+LEFT JOIN asset_totals ON asset_totals.repository_id = dr.id
+LEFT JOIN layer_totals ON layer_totals.repository_id = dr.id
+ORDER BY nexus_asset_bytes DESC, docker_logical_bytes DESC, dr.id
 LIMIT sqlc.arg(limit_count);
 
 -- name: ListImageAnalytics :many
-WITH tag_rollup AS (
+WITH docker_images AS (
+  SELECT
+    ci.id,
+    ci.repository_id,
+    ci.name,
+    r.nexus_instance_id,
+    r.name AS repository_name
+  FROM container_images ci
+  JOIN repositories r ON r.id = ci.repository_id
+  WHERE r.format = 'docker'
+    AND r.type = 'hosted'
+    AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
+    AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
+    AND (sqlc.narg(search)::text IS NULL OR ci.name ILIKE '%' || sqlc.narg(search)::text || '%')
+),
+tag_rollup AS (
   SELECT
     ci.id AS image_id,
     count(ct.id)::bigint AS active_tag_count,
     COALESCE(sum(dm.logical_size_bytes), 0)::bigint AS docker_logical_bytes,
     min(ct.first_seen_at) AS oldest_tag_first_seen_at,
     max(ct.last_seen_at) AS newest_tag_last_seen_at
-  FROM container_images ci
+  FROM docker_images ci
   LEFT JOIN container_tags ct ON ct.image_id = ci.id AND ct.deleted_at IS NULL
   LEFT JOIN docker_manifests dm ON dm.repository_id = ci.repository_id AND dm.digest = ct.digest
   GROUP BY ci.id
@@ -121,7 +144,7 @@ tag_manifest_targets AS (
     dm.id AS manifest_id,
     dm.metadata
   FROM container_tags ct
-  JOIN container_images ci ON ci.id = ct.image_id
+  JOIN docker_images ci ON ci.id = ct.image_id
   JOIN docker_manifests dm ON dm.repository_id = ci.repository_id AND dm.digest = ct.digest
   WHERE ct.deleted_at IS NULL
 ),
@@ -170,13 +193,9 @@ SELECT
 FROM container_images ci
 JOIN repositories r ON r.id = ci.repository_id
 JOIN nexus_instances n ON n.id = r.nexus_instance_id
+JOIN docker_images di ON di.id = ci.id
 LEFT JOIN tag_rollup ON tag_rollup.image_id = ci.id
 LEFT JOIN layer_rollup ON layer_rollup.image_id = ci.id
-WHERE r.format = 'docker'
-  AND r.type = 'hosted'
-  AND (sqlc.narg(nexus_instance_id)::bigint IS NULL OR r.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
-  AND (sqlc.narg(repository_name)::text IS NULL OR r.name = sqlc.narg(repository_name)::text)
-  AND (sqlc.narg(search)::text IS NULL OR ci.name ILIKE '%' || sqlc.narg(search)::text || '%')
 ORDER BY docker_logical_bytes DESC, active_tag_count DESC, ci.id
 LIMIT sqlc.arg(limit_count);
 
@@ -235,13 +254,15 @@ tag_layer_rollup AS (
 ),
 asset_downloads AS (
   SELECT
-    repository_id,
-    checksum_sha256,
-    max(last_downloaded_at) AS last_downloaded_at
-  FROM nexus_assets
-  WHERE checksum_sha256 IS NOT NULL
-    AND checksum_sha256 <> ''
-  GROUP BY repository_id, checksum_sha256
+    na.repository_id,
+    na.checksum_sha256,
+    max(na.last_downloaded_at) AS last_downloaded_at
+  FROM nexus_assets na
+  JOIN (SELECT DISTINCT repository_id FROM tag_manifest_targets) scoped_repositories
+    ON scoped_repositories.repository_id = na.repository_id
+  WHERE na.checksum_sha256 IS NOT NULL
+    AND na.checksum_sha256 <> ''
+  GROUP BY na.repository_id, na.checksum_sha256
 )
 SELECT
   ct.id AS tag_id,

@@ -85,6 +85,9 @@ func TestMe(t *testing.T) {
 	if user.Username != "admin" || user.Role != "admin" {
 		t.Fatalf("user = %+v", user)
 	}
+	if !containsString(user.Capabilities, CapabilityExecuteCleanup) || !containsString(user.Capabilities, CapabilityManageSettings) {
+		t.Fatalf("capabilities = %+v", user.Capabilities)
+	}
 }
 
 func TestMeRequiresAuth(t *testing.T) {
@@ -139,6 +142,9 @@ func TestSessionLoginMeAndLogout(t *testing.T) {
 	if user.Username != "admin" || user.Role != "admin" {
 		t.Fatalf("user = %+v", user)
 	}
+	if !containsString(user.Capabilities, CapabilityManageIndex) {
+		t.Fatalf("capabilities = %+v", user.Capabilities)
+	}
 
 	logoutReq := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
 	logoutReq.AddCookie(cookies[0])
@@ -175,7 +181,16 @@ func TestAdminStatusRequiresAdminRole(t *testing.T) {
 	}
 }
 
-func TestListIndexRunsAllowsReadOnly(t *testing.T) {
+func TestGetRetentionSettingsAllowsReadOnly(t *testing.T) {
+	indexing := &fakeIndexingService{
+		retentionSettings: RetentionSettings{
+			IntervalSeconds:         3600,
+			ScanRunDays:             30,
+			CleanupExecutionDays:    365,
+			VerificationFindingDays: 180,
+			TrendSnapshotDays:       365,
+		},
+	}
 	server := NewServer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		WithSessionManager(&fakeSessionManager{
@@ -185,11 +200,9 @@ func TestListIndexRunsAllowsReadOnly(t *testing.T) {
 				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
 			},
 		}),
-		WithIndexingService(&fakeIndexingService{
-			runs: []IndexRun{{ID: 42, NexusInstanceID: 7, ScanType: "recent_sync", Status: "running", StartedAt: time.Now()}},
-		}),
+		WithIndexingService(indexing),
 	)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/index/runs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/retention-settings", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
 	rec := httptest.NewRecorder()
 
@@ -197,6 +210,289 @@ func TestListIndexRunsAllowsReadOnly(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var settings RetentionSettings
+	if err := json.NewDecoder(rec.Body).Decode(&settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.ScanRunDays != 30 || settings.CleanupExecutionDays != 365 {
+		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestUpdateRetentionSettingsRequiresManageSettings(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(&fakeIndexingService{}),
+	)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/retention-settings", bytes.NewBufferString(`{"interval_seconds":3600,"scan_run_days":30,"cleanup_execution_days":365,"verification_finding_days":180,"trend_snapshot_days":365}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestUpdateRetentionSettings(t *testing.T) {
+	indexing := &fakeIndexingService{}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/retention-settings", bytes.NewBufferString(`{"interval_seconds":7200,"scan_run_days":45,"cleanup_execution_days":400,"verification_finding_days":120,"trend_snapshot_days":730}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.retentionRequest.IntervalSeconds != 7200 ||
+		indexing.retentionRequest.ScanRunDays != 45 ||
+		indexing.retentionRequest.UpdatedBy != "admin" {
+		t.Fatalf("retention request = %+v", indexing.retentionRequest)
+	}
+}
+
+func TestUpdateRetentionSettingsValidatesValues(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+		WithIndexingService(&fakeIndexingService{}),
+	)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/retention-settings", bytes.NewBufferString(`{"interval_seconds":30,"scan_run_days":0,"cleanup_execution_days":365,"verification_finding_days":180,"trend_snapshot_days":365}`))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPINegativePathsReturnProblemResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		path        string
+		body        string
+		user        AuthenticatedUser
+		indexing    IndexingService
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:       "malformed login json",
+			method:     http.MethodPost,
+			path:       "/api/v1/session",
+			body:       "{",
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_request",
+		},
+		{
+			name:       "start run invalid json",
+			method:     http.MethodPost,
+			path:       "/api/v1/index/runs",
+			body:       "{",
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			indexing:   &fakeIndexingService{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_request",
+		},
+		{
+			name:       "start run indexing not configured",
+			method:     http.MethodPost,
+			path:       "/api/v1/index/runs",
+			body:       `{"scan_type":"recent_sync"}`,
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "indexing_not_configured",
+		},
+		{
+			name:       "read only schedule mutation forbidden",
+			method:     http.MethodPost,
+			path:       "/api/v1/admin/indexing-schedules",
+			body:       `{"name":"recent-sync","scan_type":"recent_sync","interval_seconds":1800}`,
+			user:       AuthenticatedUser{Username: "reader", Role: "read_only"},
+			indexing:   &fakeIndexingService{},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "forbidden",
+		},
+		{
+			name:       "invalid retry task id",
+			method:     http.MethodPost,
+			path:       "/api/v1/index/tasks/not-a-number/retry",
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			indexing:   &fakeIndexingService{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_path_parameter",
+		},
+		{
+			name:       "invalid tag pattern",
+			method:     http.MethodPost,
+			path:       "/api/v1/admin/tag-patterns",
+			body:       `{"name":"missing_regex"}`,
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			indexing:   &fakeIndexingService{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_tag_pattern",
+		},
+		{
+			name:       "invalid cleanup execution",
+			method:     http.MethodPost,
+			path:       "/api/v1/cleanup/executions",
+			body:       `{"nexus_instance_id":7,"policy_yaml":"name: bad","approval_text":"bad"}`,
+			user:       AuthenticatedUser{Username: "admin", Role: "admin"},
+			indexing:   &fakeIndexingService{err: fakeInvalidRequestError("approval text mismatch")},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "cleanup_execution_invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := []Option{}
+			if tt.user.Username != "" {
+				opts = append(opts, WithSessionManager(&fakeSessionManager{
+					session: Session{
+						Token:     "session-token",
+						ExpiresAt: time.Now().Add(time.Hour),
+						User:      tt.user,
+					},
+				}))
+			}
+			if tt.indexing != nil {
+				opts = append(opts, WithIndexingService(tt.indexing))
+			}
+			server := NewServer(slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("X-Request-ID", "req-negative")
+			if tt.user.Username != "" {
+				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+			}
+			rec := httptest.NewRecorder()
+
+			server.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			var problem problemResponse
+			if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+				t.Fatal(err)
+			}
+			if problem.Code != tt.wantCode || problem.RequestID != "req-negative" {
+				t.Fatalf("problem = %+v", problem)
+			}
+		})
+	}
+}
+
+func TestCustomRoleCapabilitiesAuthorizeAccess(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User: AuthenticatedUser{
+					Username:     "settings-user",
+					Role:         "settings_manager",
+					Capabilities: []string{CapabilityRead, CapabilityManageSettings},
+				},
+			},
+		}),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/status", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestCustomRoleCapabilitiesDoNotInheritAdminFallback(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User: AuthenticatedUser{
+					Username:     "cleanup-user",
+					Role:         "cleanup_executor",
+					Capabilities: []string{CapabilityRead, CapabilityExecuteCleanup},
+				},
+			},
+		}),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/status", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestListIndexRunsAllowsReadOnly(t *testing.T) {
+	indexing := &fakeIndexingService{
+		runs: []IndexRun{{ID: 42, NexusInstanceID: 7, ScanType: "recent_sync", Status: "running", StartedAt: time.Now()}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/index/runs?limit=25", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.runLimit != 25 {
+		t.Fatalf("run limit = %d, want 25", indexing.runLimit)
 	}
 	var body struct {
 		Runs []IndexRun `json:"runs"`
@@ -569,6 +865,128 @@ func TestRequestCleanupExecutionRequiresAdminAndRecordsApproval(t *testing.T) {
 	}
 	if response.Status != "blocked_read_only" || response.DestructiveEnabled {
 		t.Fatalf("cleanup execution = %+v", response)
+	}
+}
+
+func TestListCleanupExecutionsAllowsReadOnly(t *testing.T) {
+	now := time.Now()
+	indexing := &fakeIndexingService{
+		cleanupExecutions: []CleanupExecution{{
+			ID:                     11,
+			NexusInstanceID:        7,
+			PolicyName:             "ci-cleanup",
+			Status:                 "running",
+			RequestedBy:            "admin",
+			DestructiveEnabled:     true,
+			ApprovedCandidateCount: 3,
+			CreatedAt:              now,
+		}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cleanup/executions?nexus_instance_id=7&limit=25", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.cleanupNexusID != 7 || indexing.cleanupLimit != 25 {
+		t.Fatalf("cleanup list query = nexus %d limit %d", indexing.cleanupNexusID, indexing.cleanupLimit)
+	}
+	var body struct {
+		Executions []CleanupExecution `json:"executions"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Executions) != 1 || body.Executions[0].ID != 11 {
+		t.Fatalf("executions = %+v", body.Executions)
+	}
+}
+
+func TestCancelCleanupExecutionRequiresAdmin(t *testing.T) {
+	indexing := &fakeIndexingService{
+		cleanupExecution: CleanupExecution{ID: 11, Status: "cancel_requested", RequestedBy: "admin", CreatedAt: time.Now()},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cleanup/executions/11/cancel", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.cleanupExecutionID != 11 || indexing.cleanupCanceledBy != "admin" {
+		t.Fatalf("cancel request = id %d by %q", indexing.cleanupExecutionID, indexing.cleanupCanceledBy)
+	}
+}
+
+func TestListCleanupExecutionEventsAllowsReadOnly(t *testing.T) {
+	now := time.Now()
+	indexing := &fakeIndexingService{
+		cleanupEvents: []CleanupExecutionEvent{{
+			ID:                 21,
+			CleanupExecutionID: 11,
+			EventType:          "tag_deleted",
+			Status:             "deleted",
+			CreatedAt:          now,
+		}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "reader", Role: "read_only"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cleanup/executions/11/events?limit=25", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.cleanupEventID != 11 || indexing.cleanupEventLimit != 25 {
+		t.Fatalf("event query = id %d limit %d", indexing.cleanupEventID, indexing.cleanupEventLimit)
+	}
+	var body struct {
+		Events []CleanupExecutionEvent `json:"events"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Events) != 1 || body.Events[0].EventType != "tag_deleted" {
+		t.Fatalf("events = %+v", body.Events)
 	}
 }
 
@@ -960,6 +1378,90 @@ func TestListVerificationFindingsAllowsReadOnly(t *testing.T) {
 	}
 }
 
+func TestAdditionalAPIRoutesTranslateRequests(t *testing.T) {
+	now := time.Now()
+	rps := 2.5
+	indexing := &fakeIndexingService{
+		instances: []NexusInstance{{ID: 7, Name: "local", BaseURL: "http://nexus:8081", CreatedAt: now, UpdatedAt: now}},
+		schedules: []IndexingSchedule{{
+			ID: 3, NexusInstanceID: 7, NexusName: "local", ScanType: "recent_sync", Name: "recent-sync", Enabled: true, IntervalSeconds: 1800, CreatedAt: now, UpdatedAt: now,
+		}},
+		savedSchedule: IndexingSchedule{ID: 4, NexusInstanceID: 7, Name: "weekly", ScanType: "bounded_reindex", Enabled: true, IntervalSeconds: 604800, CreatedAt: now, UpdatedAt: now},
+		control:       IndexingControl{NexusInstanceID: 7, AssetListRPS: &rps},
+		repositories:  []RepositoryAnalytics{{RepositoryID: 1, NexusInstanceID: 7, RepositoryName: "docker-hosted", ActiveTagCount: 2, LastSeenAt: &now}},
+		images:        []ImageAnalytics{{ImageID: 2, RepositoryID: 1, NexusInstanceID: 7, RepositoryName: "docker-hosted", ImageName: "demo/app", ActiveTagCount: 2}},
+		dismissedFinding: VerificationFinding{
+			ID: 17, Severity: "medium", FindingType: "missing_manifest", Status: "dismissed", CreatedAt: now, LastSeenAt: now,
+		},
+		patterns:     []TagPattern{{ID: 1, Name: "semver", DisplayName: "SemVer", TagRegex: "^v", Enabled: true, CreatedAt: now, UpdatedAt: now}},
+		savedPattern: TagPattern{ID: 2, Name: "channel", DisplayName: "Channel", TagRegex: "^(latest|stable)$", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		metrics:      "nexus_lens_scan_tasks{status=\"pending\"} 1\n",
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+		WithIndexingService(indexing),
+	)
+	do := func(method, path, body string, wantStatus int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, req)
+		if rec.Code != wantStatus {
+			t.Fatalf("%s %s status = %d, want %d; body %s", method, path, rec.Code, wantStatus, rec.Body.String())
+		}
+		return rec
+	}
+
+	do(http.MethodGet, "/api/v1/admin/nexus-instances?limit=12", "", http.StatusOK)
+	if indexing.instanceLimit != 12 {
+		t.Fatalf("instance limit = %d", indexing.instanceLimit)
+	}
+	do(http.MethodGet, "/api/v1/admin/indexing-schedules?nexus_instance_id=7&limit=25", "", http.StatusOK)
+	if indexing.scheduleNexusID != 7 || indexing.scheduleLimit != 25 {
+		t.Fatalf("schedule query = nexus %d limit %d", indexing.scheduleNexusID, indexing.scheduleLimit)
+	}
+	do(http.MethodPost, "/api/v1/admin/indexing-schedules", `{"nexus_name":"local","base_url":"http://nexus:8081","name":"weekly","scan_type":"bounded_reindex","interval_seconds":604800,"enabled":true,"scope":{"repositories":["docker-hosted"],"window_days":7}}`, http.StatusOK)
+	if indexing.scheduleRequest.Name != "weekly" || indexing.scheduleRequest.Scope.WindowDays != 7 {
+		t.Fatalf("schedule request = %+v", indexing.scheduleRequest)
+	}
+	do(http.MethodPut, "/api/v1/admin/nexus/7/rate-limits", `{"asset_list_rps":2.5}`, http.StatusOK)
+	if indexing.rateLimitNexusID != 7 || indexing.rateLimitRequest.AssetListRPS == nil || *indexing.rateLimitRequest.AssetListRPS != 2.5 {
+		t.Fatalf("rate limit request = nexus %d %+v", indexing.rateLimitNexusID, indexing.rateLimitRequest)
+	}
+	do(http.MethodGet, "/api/v1/analytics/repositories?nexus_instance_id=7&search=docker&limit=25", "", http.StatusOK)
+	if indexing.analyticsRequest.Search != "docker" || indexing.analyticsRequest.Limit != 25 {
+		t.Fatalf("repository analytics request = %+v", indexing.analyticsRequest)
+	}
+	do(http.MethodGet, "/api/v1/analytics/images?nexus_instance_id=7&repository_name=docker-hosted&search=demo&limit=10", "", http.StatusOK)
+	if indexing.analyticsRequest.RepositoryName != "docker-hosted" || indexing.analyticsRequest.Search != "demo" {
+		t.Fatalf("image analytics request = %+v", indexing.analyticsRequest)
+	}
+	do(http.MethodPost, "/api/v1/index/verification/findings/17/dismiss", "", http.StatusOK)
+	if indexing.dismissedFindingID != 17 || indexing.dismissedBy != "admin" {
+		t.Fatalf("dismiss request = id %d by %q", indexing.dismissedFindingID, indexing.dismissedBy)
+	}
+	do(http.MethodGet, "/api/v1/admin/tag-patterns?limit=20", "", http.StatusOK)
+	if indexing.patternLimit != 20 {
+		t.Fatalf("pattern limit = %d", indexing.patternLimit)
+	}
+	do(http.MethodPost, "/api/v1/admin/tag-patterns", `{"name":"channel","display_name":"Channel","tag_regex":"^(latest|stable)$","priority":100,"enabled":true}`, http.StatusOK)
+	if indexing.patternSaveRequest.Name != "channel" || indexing.patternSaveRequest.Priority != 100 {
+		t.Fatalf("pattern save request = %+v", indexing.patternSaveRequest)
+	}
+	rec := do(http.MethodGet, "/metrics", "", http.StatusOK)
+	if !strings.Contains(rec.Body.String(), "nexus_lens_scan_tasks") {
+		t.Fatalf("metrics body = %q", rec.Body.String())
+	}
+}
+
 func TestDismissVerificationFindingRequiresAdmin(t *testing.T) {
 	now := time.Now()
 	indexing := &fakeIndexingService{
@@ -1034,7 +1536,7 @@ func TestListIndexingSchedulesAllowsReadOnly(t *testing.T) {
 		}),
 		WithIndexingService(indexing),
 	)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/indexing-schedules?nexus_instance_id=7", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/indexing-schedules?nexus_instance_id=7&limit=25", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
 	rec := httptest.NewRecorder()
 
@@ -1043,8 +1545,8 @@ func TestListIndexingSchedulesAllowsReadOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if indexing.scheduleNexusID != 7 {
-		t.Fatalf("schedule nexus id = %d, want 7", indexing.scheduleNexusID)
+	if indexing.scheduleNexusID != 7 || indexing.scheduleLimit != 25 {
+		t.Fatalf("schedule query = nexus %d limit %d", indexing.scheduleNexusID, indexing.scheduleLimit)
 	}
 }
 
@@ -1075,6 +1577,309 @@ func TestUpdateNexusRateLimitsRequiresAdmin(t *testing.T) {
 	}
 	if indexing.rateLimitNexusID != 7 || indexing.rateLimitRequest.AssetListRPS == nil || *indexing.rateLimitRequest.AssetListRPS != 3.5 {
 		t.Fatalf("rate limit request = id %d req %+v", indexing.rateLimitNexusID, indexing.rateLimitRequest)
+	}
+}
+
+func TestCORSPreflight(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithCORSOrigin("https://lens.example"),
+	)
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/index/runs", nil)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://lens.example" {
+		t.Fatalf("cors origin = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("cors credentials = %q", got)
+	}
+}
+
+func TestSecureSessionCookieOption(t *testing.T) {
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSecureSessionCookie(true),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{
+				Token:     "session-token",
+				ExpiresAt: time.Now().Add(time.Hour),
+				User:      AuthenticatedUser{Username: "admin", Role: "admin"},
+			},
+		}),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session", bytes.NewBufferString(`{"username":"admin","password":"admin"}`))
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookies = %+v", cookies)
+	}
+}
+
+func TestListNexusInstancesAllowsAuthenticatedUser(t *testing.T) {
+	now := time.Now()
+	indexing := &fakeIndexingService{
+		instances: []NexusInstance{{ID: 7, Name: "local", BaseURL: "http://nexus:8081", CreatedAt: now, UpdatedAt: now}},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{Token: "session-token", ExpiresAt: time.Now().Add(time.Hour), User: AuthenticatedUser{Username: "reader", Role: "read_only"}},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/nexus-instances?limit=25", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.instanceLimit != 25 {
+		t.Fatalf("instance limit = %d", indexing.instanceLimit)
+	}
+	var body struct {
+		Instances []NexusInstance `json:"instances"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Instances) != 1 || body.Instances[0].Name != "local" {
+		t.Fatalf("instances = %+v", body.Instances)
+	}
+}
+
+func TestListRepositoryAndImageAnalytics(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name        string
+		path        string
+		indexing    *fakeIndexingService
+		assertBody  func(*testing.T, *httptest.ResponseRecorder)
+		assertQuery func(*testing.T, *fakeIndexingService)
+	}{
+		{
+			name: "repositories",
+			path: "/api/v1/analytics/repositories?nexus_instance_id=7&search=docker&limit=25",
+			indexing: &fakeIndexingService{repositories: []RepositoryAnalytics{{
+				RepositoryID:           1,
+				NexusInstanceID:        7,
+				NexusName:              "local",
+				RepositoryName:         "docker-hosted",
+				ImageCount:             2,
+				DockerLogicalBytes:     100,
+				DockerUniqueLayerBytes: 50,
+				LastSeenAt:             &now,
+			}}},
+			assertBody: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Repositories []RepositoryAnalytics `json:"repositories"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Repositories) != 1 || body.Repositories[0].RepositoryName != "docker-hosted" {
+					t.Fatalf("repositories = %+v", body.Repositories)
+				}
+			},
+		},
+		{
+			name: "images",
+			path: "/api/v1/analytics/images?nexus_instance_id=7&repository_name=docker-hosted&search=demo&limit=25",
+			indexing: &fakeIndexingService{images: []ImageAnalytics{{
+				ImageID:              2,
+				RepositoryID:         1,
+				NexusInstanceID:      7,
+				NexusName:            "local",
+				RepositoryName:       "docker-hosted",
+				ImageName:            "demo/app",
+				ActiveTagCount:       3,
+				DockerLogicalBytes:   100,
+				NewestTagLastSeenAt:  &now,
+				OldestTagFirstSeenAt: &now,
+			}}},
+			assertBody: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Images []ImageAnalytics `json:"images"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Images) != 1 || body.Images[0].ImageName != "demo/app" {
+					t.Fatalf("images = %+v", body.Images)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewServer(
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithSessionManager(&fakeSessionManager{
+					session: Session{Token: "session-token", ExpiresAt: time.Now().Add(time.Hour), User: AuthenticatedUser{Username: "reader", Role: "read_only"}},
+				}),
+				WithIndexingService(tt.indexing),
+			)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+			rec := httptest.NewRecorder()
+
+			server.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if tt.indexing.analyticsRequest.NexusInstanceID != 7 || tt.indexing.analyticsRequest.Limit != 25 {
+				t.Fatalf("analytics request = %+v", tt.indexing.analyticsRequest)
+			}
+			tt.assertBody(t, rec)
+		})
+	}
+}
+
+func TestTagPatternExamplesSuggestionsAndList(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name       string
+		path       string
+		indexing   *fakeIndexingService
+		assertBody func(*testing.T, *httptest.ResponseRecorder)
+	}{
+		{
+			name: "examples",
+			path: "/api/v1/analytics/tag-patterns/examples?nexus_instance_id=7&repository_name=docker-hosted&pattern_name=feature_branch&limit=25",
+			indexing: &fakeIndexingService{patternExamples: []TagPatternExample{{
+				PatternName:    "feature_branch",
+				RepositoryName: "docker-hosted",
+				ImageName:      "demo/app",
+				Tag:            "feature-x",
+				FirstSeenAt:    now,
+				LastSeenAt:     now,
+			}}},
+			assertBody: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Examples []TagPatternExample `json:"examples"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Examples) != 1 || body.Examples[0].Tag != "feature-x" {
+					t.Fatalf("examples = %+v", body.Examples)
+				}
+			},
+		},
+		{
+			name: "suggestions",
+			path: "/api/v1/analytics/tag-patterns/suggestions?nexus_instance_id=7&repository_name=docker-hosted&limit=25",
+			indexing: &fakeIndexingService{patternSuggestions: []TagPatternSuggestion{{
+				TagShape:       "A-0",
+				TagCount:       3,
+				ExampleTags:    []string{"pr-1"},
+				SuggestedRegex: "^[A-Za-z]+-[0-9]+$",
+			}}},
+			assertBody: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Suggestions []TagPatternSuggestion `json:"suggestions"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Suggestions) != 1 || body.Suggestions[0].TagShape != "A-0" {
+					t.Fatalf("suggestions = %+v", body.Suggestions)
+				}
+			},
+		},
+		{
+			name: "admin list",
+			path: "/api/v1/admin/tag-patterns?limit=25",
+			indexing: &fakeIndexingService{patterns: []TagPattern{{
+				ID:          1,
+				Name:        "semver",
+				DisplayName: "SemVer",
+				TagRegex:    "^v?[0-9]+",
+				Enabled:     true,
+				BuiltIn:     true,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			}}},
+			assertBody: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				t.Helper()
+				var body struct {
+					Patterns []TagPattern `json:"patterns"`
+				}
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Patterns) != 1 || body.Patterns[0].Name != "semver" {
+					t.Fatalf("patterns = %+v", body.Patterns)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewServer(
+				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				WithSessionManager(&fakeSessionManager{
+					session: Session{Token: "session-token", ExpiresAt: time.Now().Add(time.Hour), User: AuthenticatedUser{Username: "reader", Role: "read_only"}},
+				}),
+				WithIndexingService(tt.indexing),
+			)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+			rec := httptest.NewRecorder()
+
+			server.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			tt.assertBody(t, rec)
+		})
+	}
+}
+
+func TestResumeNexusIndexingRequiresAdmin(t *testing.T) {
+	indexing := &fakeIndexingService{
+		control: IndexingControl{NexusInstanceID: 7, Paused: false},
+	}
+	server := NewServer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithSessionManager(&fakeSessionManager{
+			session: Session{Token: "session-token", ExpiresAt: time.Now().Add(time.Hour), User: AuthenticatedUser{Username: "admin", Role: "admin"}},
+		}),
+		WithIndexingService(indexing),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/index/nexus/7/resume", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if indexing.resumedNexusID != 7 {
+		t.Fatalf("resumed nexus id = %d", indexing.resumedNexusID)
 	}
 }
 
@@ -1122,6 +1927,8 @@ type fakeIndexingService struct {
 	trendTopMovers          []TrendTopMover
 	cleanupSimulation       CleanupSimulationResult
 	cleanupExecution        CleanupExecution
+	cleanupExecutions       []CleanupExecution
+	cleanupEvents           []CleanupExecutionEvent
 	patterns                []TagPattern
 	patternAnalytics        []TagPatternAnalytics
 	patternGrowth           []TagPatternGrowth
@@ -1138,13 +1945,19 @@ type fakeIndexingService struct {
 	request                 StartIndexRunRequest
 	taskScanRunID           int64
 	taskLimit               int32
+	runLimit                int32
 	findingNexusID          int64
 	findingStatus           string
 	findingLimit            int32
 	scheduleNexusID         int64
+	scheduleLimit           int32
 	scheduleRequest         UpsertIndexingScheduleRequest
+	instanceLimit           int32
+	patternLimit            int32
 	rateLimitNexusID        int64
 	rateLimitRequest        RateLimitSettings
+	retentionSettings       RetentionSettings
+	retentionRequest        RetentionSettings
 	analyticsNexusID        int64
 	analyticsRequest        AnalyticsListRequest
 	packageRequest          AnalyticsListRequest
@@ -1152,6 +1965,12 @@ type fakeIndexingService struct {
 	trendTopMoversRequest   TrendTopMoversRequest
 	cleanupRequest          CleanupSimulationRequest
 	cleanupExecutionRequest CleanupExecutionRequest
+	cleanupNexusID          int64
+	cleanupLimit            int32
+	cleanupExecutionID      int64
+	cleanupEventID          int64
+	cleanupEventLimit       int32
+	cleanupCanceledBy       string
 	patternRequest          TagPatternListRequest
 	patternSaveRequest      UpsertTagPatternRequest
 	reclassificationRequest TagReclassificationRequest
@@ -1161,8 +1980,14 @@ type fakeIndexingService struct {
 	dismissedBy             string
 	pausedReason            string
 	pausedBy                string
+	resumedNexusID          int64
 	err                     error
 }
+
+type fakeInvalidRequestError string
+
+func (e fakeInvalidRequestError) Error() string        { return string(e) }
+func (e fakeInvalidRequestError) InvalidRequest() bool { return true }
 
 func (f *fakeIndexingService) StartIndexRun(_ context.Context, req StartIndexRunRequest) (IndexRun, error) {
 	f.request = req
@@ -1172,7 +1997,8 @@ func (f *fakeIndexingService) StartIndexRun(_ context.Context, req StartIndexRun
 	return f.started, nil
 }
 
-func (f *fakeIndexingService) ListIndexRuns(context.Context, int32) ([]IndexRun, error) {
+func (f *fakeIndexingService) ListIndexRuns(_ context.Context, limit int32) ([]IndexRun, error) {
+	f.runLimit = limit
 	return f.runs, nil
 }
 
@@ -1209,12 +2035,14 @@ func (f *fakeIndexingService) PrometheusMetrics(context.Context) (string, error)
 	return f.metrics, nil
 }
 
-func (f *fakeIndexingService) ListNexusInstances(context.Context) ([]NexusInstance, error) {
+func (f *fakeIndexingService) ListNexusInstances(_ context.Context, limit int32) ([]NexusInstance, error) {
+	f.instanceLimit = limit
 	return f.instances, nil
 }
 
-func (f *fakeIndexingService) ListIndexingSchedules(_ context.Context, nexusInstanceID int64) ([]IndexingSchedule, error) {
+func (f *fakeIndexingService) ListIndexingSchedules(_ context.Context, nexusInstanceID int64, limit int32) ([]IndexingSchedule, error) {
 	f.scheduleNexusID = nexusInstanceID
+	f.scheduleLimit = limit
 	return f.schedules, nil
 }
 
@@ -1227,6 +2055,16 @@ func (f *fakeIndexingService) UpdateNexusRateLimits(_ context.Context, nexusInst
 	f.rateLimitNexusID = nexusInstanceID
 	f.rateLimitRequest = req
 	return f.control, nil
+}
+
+func (f *fakeIndexingService) GetRetentionSettings(context.Context) (RetentionSettings, error) {
+	return f.retentionSettings, nil
+}
+
+func (f *fakeIndexingService) UpdateRetentionSettings(_ context.Context, req RetentionSettings) (RetentionSettings, error) {
+	f.retentionRequest = req
+	req.Configured = true
+	return req, nil
 }
 
 func (f *fakeIndexingService) GetAnalyticsOverview(_ context.Context, nexusInstanceID int64) (AnalyticsOverview, error) {
@@ -1280,7 +2118,26 @@ func (f *fakeIndexingService) RequestCleanupExecution(_ context.Context, req Cle
 	return f.cleanupExecution, nil
 }
 
-func (f *fakeIndexingService) ListTagPatterns(context.Context) ([]TagPattern, error) {
+func (f *fakeIndexingService) ListCleanupExecutions(_ context.Context, nexusInstanceID int64, limit int32) ([]CleanupExecution, error) {
+	f.cleanupNexusID = nexusInstanceID
+	f.cleanupLimit = limit
+	return f.cleanupExecutions, nil
+}
+
+func (f *fakeIndexingService) CancelCleanupExecution(_ context.Context, cleanupExecutionID int64, canceledBy string) (CleanupExecution, error) {
+	f.cleanupExecutionID = cleanupExecutionID
+	f.cleanupCanceledBy = canceledBy
+	return f.cleanupExecution, nil
+}
+
+func (f *fakeIndexingService) ListCleanupExecutionEvents(_ context.Context, cleanupExecutionID int64, limit int32) ([]CleanupExecutionEvent, error) {
+	f.cleanupEventID = cleanupExecutionID
+	f.cleanupEventLimit = limit
+	return f.cleanupEvents, nil
+}
+
+func (f *fakeIndexingService) ListTagPatterns(_ context.Context, limit int32) ([]TagPattern, error) {
+	f.patternLimit = limit
 	return f.patterns, nil
 }
 
@@ -1320,7 +2177,8 @@ func (f *fakeIndexingService) PauseNexusIndexing(_ context.Context, _ int64, rea
 	return f.control, nil
 }
 
-func (f *fakeIndexingService) ResumeNexusIndexing(context.Context, int64) (IndexingControl, error) {
+func (f *fakeIndexingService) ResumeNexusIndexing(_ context.Context, nexusInstanceID int64) (IndexingControl, error) {
+	f.resumedNexusID = nexusInstanceID
 	return f.control, nil
 }
 
@@ -1335,4 +2193,13 @@ func (f fakeOperationLockConflict) Error() string {
 
 func (f fakeOperationLockConflict) OperationLockConflict() (int64, string) {
 	return f.runID, f.scanType
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

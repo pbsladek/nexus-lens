@@ -13,6 +13,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: env -u GOROOT go test ./...
+      - uses: azure/setup-helm@v4
+      - run: make helm-check
       - uses: actions/setup-node@v4
         with:
           node-version: 24

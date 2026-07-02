@@ -271,17 +271,17 @@ Recent sync and bounded reindex may verify an explicit subject, but they must no
 
 Default retention:
 
-- Successful scan runs/tasks: 14-90 days depending on row type.
-- Failed runs/tasks/attempts: 90 days.
+- Terminal scan runs: 30 days by default.
+- Terminal cleanup executions: 365 days by default, with event rows cascading from the execution.
 - Open verification findings: keep until resolved or dismissed.
-- Resolved verification findings: 180 days.
+- Closed verification findings: 180 days by default.
 - Trend snapshots: 365 days.
 
 Retention jobs:
 
-- Run in small batches.
-- Use advisory locks.
-- Avoid deleting active runs, active tasks, open findings, or checkpoints required for resume.
+- Run from the worker on a configurable interval, one hour by default.
+- Avoid deleting active runs, active cleanup executions, active tasks, open findings, or checkpoints required for resume.
+- Do not downsample trend snapshots in v1.
 
 ## Observability
 

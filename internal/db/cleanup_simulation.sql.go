@@ -71,13 +71,14 @@ tag_layer_rollup AS (
 ),
 asset_downloads AS (
   SELECT
-    repository_id,
-    checksum_sha256,
-    max(last_downloaded_at) AS last_downloaded_at
-  FROM nexus_assets
-  WHERE checksum_sha256 IS NOT NULL
-    AND checksum_sha256 <> ''
-  GROUP BY repository_id, checksum_sha256
+    na.repository_id,
+    na.checksum_sha256,
+    max(na.last_downloaded_at) AS last_downloaded_at
+  FROM nexus_assets na
+  JOIN docker_repositories dr ON dr.id = na.repository_id
+  WHERE na.checksum_sha256 IS NOT NULL
+    AND na.checksum_sha256 <> ''
+  GROUP BY na.repository_id, na.checksum_sha256
 )
 SELECT
   ct.id AS tag_id,

@@ -16,6 +16,8 @@ export type UpsertIndexingScheduleRequest =
   paths["/api/v1/admin/indexing-schedules"]["post"]["requestBody"]["content"]["application/json"];
 export type RateLimitSettings =
   paths["/api/v1/admin/nexus/{nexus_instance_id}/rate-limits"]["put"]["requestBody"]["content"]["application/json"];
+export type RetentionSettings =
+  paths["/api/v1/admin/retention-settings"]["get"]["responses"][200]["content"]["application/json"];
 export type StartIndexRunRequest =
   paths["/api/v1/index/runs"]["post"]["requestBody"]["content"]["application/json"];
 export type IndexRun =
@@ -51,7 +53,34 @@ export type CleanupSimulationWarning = CleanupSimulationResult["warnings"][numbe
 export type CleanupExecutionRequest =
   paths["/api/v1/cleanup/executions"]["post"]["requestBody"]["content"]["application/json"];
 export type CleanupExecution =
-  paths["/api/v1/cleanup/executions"]["post"]["responses"][202]["content"]["application/json"];
+  paths["/api/v1/cleanup/executions"]["post"]["responses"][202]["content"]["application/json"] & {
+    approved_candidate_count?: number;
+    post_delete_reconcile_run_id?: number;
+    started_at?: string;
+    cancel_requested_at?: string;
+    canceled_by?: string;
+    locked_by?: string;
+    lease_expires_at?: string;
+  };
+export type CleanupExecutionEvent = {
+  id: number;
+  cleanup_execution_id: number;
+  event_type: string;
+  actor?: string;
+  repository_name?: string;
+  image_name?: string;
+  tag?: string;
+  tag_id?: number;
+  rule_name?: string;
+  component_id?: string;
+  status?: string;
+  message?: string;
+  error_class?: string;
+  error_code?: string;
+  error_message?: string;
+  details?: unknown;
+  created_at: string;
+};
 export type PackageFormatRepository =
   paths["/api/v1/packages/repositories"]["get"]["responses"][200]["content"]["application/json"]["repositories"][number];
 export type TagPattern =
@@ -144,8 +173,13 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function listIndexRuns(): Promise<IndexRunsResponse> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/runs`, {
+export async function listIndexRuns(limit?: number): Promise<IndexRunsResponse> {
+  const params = new URLSearchParams();
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`${apiBaseURL}/api/v1/index/runs${query ? `?${query}` : ""}`, {
     credentials: "include",
   });
   if (!response.ok) {
@@ -154,8 +188,13 @@ export async function listIndexRuns(): Promise<IndexRunsResponse> {
   return (await response.json()) as IndexRunsResponse;
 }
 
-export async function listNexusInstances(): Promise<{ instances: NexusInstance[] }> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/nexus-instances`, {
+export async function listNexusInstances(limit?: number): Promise<{ instances: NexusInstance[] }> {
+  const params = new URLSearchParams();
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/nexus-instances${query ? `?${query}` : ""}`, {
     credentials: "include",
   });
   if (!response.ok) {
@@ -164,12 +203,19 @@ export async function listNexusInstances(): Promise<{ instances: NexusInstance[]
   return (await response.json()) as { instances: NexusInstance[] };
 }
 
-export async function listIndexingSchedules(nexusInstanceID?: number): Promise<{ schedules: IndexingSchedule[] }> {
+export async function listIndexingSchedules(
+  nexusInstanceID?: number,
+  limit?: number,
+): Promise<{ schedules: IndexingSchedule[] }> {
   const params = new URLSearchParams();
   if (nexusInstanceID && nexusInstanceID > 0) {
     params.set("nexus_instance_id", String(nexusInstanceID));
   }
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/indexing-schedules?${params.toString()}`, {
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/indexing-schedules${query ? `?${query}` : ""}`, {
     credentials: "include",
   });
   if (!response.ok) {
@@ -211,6 +257,33 @@ export async function updateNexusRateLimits(
     throw new Error(`save rate limits failed with status ${response.status}`);
   }
   return (await response.json()) as IndexingControl;
+}
+
+export async function getRetentionSettings(): Promise<RetentionSettings> {
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/retention-settings`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`retention settings request failed with status ${response.status}`);
+  }
+  return (await response.json()) as RetentionSettings;
+}
+
+export async function updateRetentionSettings(
+  request: RetentionSettings,
+): Promise<RetentionSettings> {
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/retention-settings`, {
+    method: "PUT",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    throw new Error(`save retention settings failed with status ${response.status}`);
+  }
+  return (await response.json()) as RetentionSettings;
 }
 
 export async function startIndexRun(request: StartIndexRunRequest): Promise<IndexRun> {
@@ -430,8 +503,56 @@ export async function requestCleanupExecution(
   return (await response.json()) as CleanupExecution;
 }
 
-export async function listTagPatterns(): Promise<{ patterns: TagPattern[] }> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/tag-patterns`, {
+export async function listCleanupExecutions(options: AnalyticsListOptions = {}): Promise<{ executions: CleanupExecution[] }> {
+  const params = new URLSearchParams();
+  if (options.nexusInstanceID && options.nexusInstanceID > 0) {
+    params.set("nexus_instance_id", String(options.nexusInstanceID));
+  }
+  if (options.limit && options.limit > 0) {
+    params.set("limit", String(options.limit));
+  }
+  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions?${params.toString()}`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`cleanup executions request failed with status ${response.status}`);
+  }
+  return (await response.json()) as { executions: CleanupExecution[] };
+}
+
+export async function listCleanupExecutionEvents(
+  cleanupExecutionID: number,
+  limit = 200,
+): Promise<{ events: CleanupExecutionEvent[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(
+    `${apiBaseURL}/api/v1/cleanup/executions/${cleanupExecutionID}/events?${params.toString()}`,
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    throw new Error(`cleanup execution events request failed with status ${response.status}`);
+  }
+  return (await response.json()) as { events: CleanupExecutionEvent[] };
+}
+
+export async function cancelCleanupExecution(cleanupExecutionID: number): Promise<CleanupExecution> {
+  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions/${cleanupExecutionID}/cancel`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`cleanup execution cancel failed with status ${response.status}`);
+  }
+  return (await response.json()) as CleanupExecution;
+}
+
+export async function listTagPatterns(limit?: number): Promise<{ patterns: TagPattern[] }> {
+  const params = new URLSearchParams();
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`${apiBaseURL}/api/v1/admin/tag-patterns${query ? `?${query}` : ""}`, {
     credentials: "include",
   });
   if (!response.ok) {

@@ -22,6 +22,13 @@ func textRequired(value string) pgtype.Text {
 	return pgtype.Text{String: value, Valid: true}
 }
 
+func textValue(value pgtype.Text) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
+}
+
 func int8(value int64, valid bool) pgtype.Int8 {
 	return pgtype.Int8{Int64: value, Valid: valid}
 }
@@ -31,6 +38,17 @@ func optionalInt8(value int64) pgtype.Int8 {
 		return pgtype.Int8{}
 	}
 	return int8(value, true)
+}
+
+func int4(value int32, valid bool) pgtype.Int4 {
+	return pgtype.Int4{Int32: value, Valid: valid}
+}
+
+func optionalInt4(value int32) pgtype.Int4 {
+	if value <= 0 {
+		return pgtype.Int4{}
+	}
+	return int4(value, true)
 }
 
 func timestamptz(value time.Time) pgtype.Timestamptz {
@@ -107,4 +125,40 @@ func envOrFile(envKey, fileKey string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func envBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

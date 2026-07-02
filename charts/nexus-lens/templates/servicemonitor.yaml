@@ -4,7 +4,7 @@ kind: ServiceMonitor
 metadata:
   name: {{ include "nexus-lens.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+    {{- include "nexus-lens.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 {{- with .Values.metrics.serviceMonitor.labels }}
 {{ toYaml . | nindent 4 }}
@@ -12,7 +12,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+      {{- include "nexus-lens.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: api
   endpoints:
     - port: http

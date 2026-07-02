@@ -1,7 +1,8 @@
 -- name: ListNexusInstances :many
 SELECT id, name, base_url, created_at, updated_at
 FROM nexus_instances
-ORDER BY name, id;
+ORDER BY name, id
+LIMIT sqlc.arg(limit_count);
 
 -- name: GetNexusInstanceByID :one
 SELECT id, name, base_url, created_at, updated_at
@@ -29,7 +30,8 @@ SELECT
 FROM indexing_schedules s
 JOIN nexus_instances n ON n.id = s.nexus_instance_id
 WHERE (sqlc.narg(nexus_instance_id)::bigint IS NULL OR s.nexus_instance_id = sqlc.narg(nexus_instance_id)::bigint)
-ORDER BY n.name, s.name, s.id;
+ORDER BY n.name, s.name, s.id
+LIMIT sqlc.arg(limit_count);
 
 -- name: UpsertNexusRateLimits :one
 INSERT INTO nexus_indexing_controls (

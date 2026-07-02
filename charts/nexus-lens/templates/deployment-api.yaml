@@ -2,21 +2,25 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "nexus-lens.fullname" . }}-api
+  labels:
+    {{- include "nexus-lens.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.api.replicas }}
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+      {{- include "nexus-lens.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: api
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "nexus-lens.name" . }}
+        {{- include "nexus-lens.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
       containers:
         - name: api
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "nexus-lens.apiImage" . | quote }}
+          imagePullPolicy: {{ include "nexus-lens.apiImagePullPolicy" . | quote }}
           env:
             - name: NEXUS_LENS_ADDR
               value: ":{{ .Values.api.port }}"
@@ -30,6 +34,16 @@ spec:
               value: {{ .Values.cleanup.destructiveExecution.maintenanceWindowUTC.start | quote }}
             - name: NEXUS_LENS_CLEANUP_MAINTENANCE_END_UTC
               value: {{ .Values.cleanup.destructiveExecution.maintenanceWindowUTC.end | quote }}
+            - name: NEXUS_LENS_RETENTION_INTERVAL_SECONDS
+              value: {{ .Values.worker.retention.intervalSeconds | quote }}
+            - name: NEXUS_LENS_RETENTION_SCAN_RUN_DAYS
+              value: {{ .Values.worker.retention.scanRunDays | quote }}
+            - name: NEXUS_LENS_RETENTION_CLEANUP_EXECUTION_DAYS
+              value: {{ .Values.worker.retention.cleanupExecutionDays | quote }}
+            - name: NEXUS_LENS_RETENTION_VERIFICATION_FINDING_DAYS
+              value: {{ .Values.worker.retention.verificationFindingDays | quote }}
+            - name: NEXUS_LENS_RETENTION_TREND_SNAPSHOT_DAYS
+              value: {{ .Values.worker.retention.trendSnapshotDays | quote }}
             {{ if .Values.nexus.credentials.existingSecret }}
             - name: NEXUS_LENS_NEXUS_USERNAME
               valueFrom:

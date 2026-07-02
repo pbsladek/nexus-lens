@@ -120,6 +120,8 @@ paths:
       security:
         - basicAuth: []
         - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Configured Nexus instances.
@@ -152,6 +154,7 @@ paths:
           schema:
             type: integer
             format: int64
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Indexing schedules.
@@ -245,12 +248,69 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /api/v1/admin/retention-settings:
+    get:
+      operationId: getRetentionSettings
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Effective retention settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionSettings"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    put:
+      operationId: updateRetentionSettings
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetentionSettings"
+      responses:
+        "200":
+          description: Retention settings saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetentionSettings"
+        "400":
+          description: Invalid retention settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/index/runs:
     get:
       operationId: listIndexRuns
       security:
         - basicAuth: []
         - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Recent index runs.
@@ -566,6 +626,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
   /api/v1/cleanup/executions:
+    get:
+      operationId: listCleanupExecutions
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/NexusInstanceID"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Recent cleanup executions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [executions]
+                properties:
+                  executions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CleanupExecution"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     post:
       operationId: requestCleanupExecution
       security:
@@ -598,6 +685,77 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "403":
           description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/cleanup/executions/{cleanup_execution_id}/cancel:
+    post:
+      operationId: cancelCleanupExecution
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: cleanup_execution_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Cleanup execution canceled or cancellation requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupExecution"
+        "400":
+          description: Cleanup execution cannot be canceled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication required or invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/v1/cleanup/executions/{cleanup_execution_id}/events:
+    get:
+      operationId: listCleanupExecutionEvents
+      security:
+        - basicAuth: []
+        - sessionCookie: []
+      parameters:
+        - name: cleanup_execution_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Cleanup execution event log.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CleanupExecutionEvent"
+        "401":
+          description: Authentication required or invalid credentials.
           content:
             application/json:
               schema:
@@ -730,6 +888,8 @@ paths:
       security:
         - basicAuth: []
         - sessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Tag pattern definitions.
@@ -1176,13 +1336,17 @@ components:
           type: string
     AppUser:
       type: object
-      required: [username, role]
+      required: [username, role, capabilities]
       properties:
         username:
           type: string
         role:
           type: string
           enum: [admin, read_only]
+        capabilities:
+          type: array
+          items:
+            type: string
     LoginRequest:
       type: object
       required: [username, password]
@@ -1194,13 +1358,17 @@ components:
           format: password
     LoginResponse:
       type: object
-      required: [username, role, expires_at]
+      required: [username, role, capabilities, expires_at]
       properties:
         username:
           type: string
         role:
           type: string
           enum: [admin, read_only]
+        capabilities:
+          type: array
+          items:
+            type: string
         expires_at:
           type: string
           format: date-time
@@ -1339,6 +1507,43 @@ components:
         default_rps:
           type: number
           minimum: 0
+    RetentionSettings:
+      type: object
+      required:
+        - interval_seconds
+        - scan_run_days
+        - cleanup_execution_days
+        - verification_finding_days
+        - trend_snapshot_days
+        - configured
+      properties:
+        interval_seconds:
+          type: integer
+          format: int32
+          minimum: 60
+        scan_run_days:
+          type: integer
+          format: int32
+          minimum: 1
+        cleanup_execution_days:
+          type: integer
+          format: int32
+          minimum: 1
+        verification_finding_days:
+          type: integer
+          format: int32
+          minimum: 1
+        trend_snapshot_days:
+          type: integer
+          format: int32
+          minimum: 1
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        configured:
+          type: boolean
     AnalyticsOverview:
       type: object
       required:
@@ -1493,6 +1698,7 @@ components:
         - repository_name
         - image_name
         - tag
+        - digest
         - pattern_name
         - docker_logical_bytes
         - estimated_reclaimable_bytes
@@ -1516,6 +1722,8 @@ components:
         image_name:
           type: string
         tag:
+          type: string
+        digest:
           type: string
         pattern_name:
           type: string
@@ -1578,6 +1786,7 @@ components:
         - destructive_enabled
         - simulation_summary
         - audit_log
+        - approved_candidate_count
         - created_at
       properties:
         id:
@@ -1600,7 +1809,13 @@ components:
           type: boolean
         simulation_summary: {}
         audit_log: {}
+        approved_candidate_count:
+          type: integer
+          format: int64
         post_delete_verification_run_id:
+          type: integer
+          format: int64
+        post_delete_reconcile_run_id:
           type: integer
           format: int64
         created_at:
@@ -1609,7 +1824,65 @@ components:
         approved_at:
           type: string
           format: date-time
+        started_at:
+          type: string
+          format: date-time
         finished_at:
+          type: string
+          format: date-time
+        lease_expires_at:
+          type: string
+          format: date-time
+        locked_by:
+          type: string
+        cancel_requested_at:
+          type: string
+          format: date-time
+        canceled_by:
+          type: string
+    CleanupExecutionEvent:
+      type: object
+      required:
+        - id
+        - cleanup_execution_id
+        - event_type
+        - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+        cleanup_execution_id:
+          type: integer
+          format: int64
+        event_type:
+          type: string
+        actor:
+          type: string
+        repository_name:
+          type: string
+        image_name:
+          type: string
+        tag:
+          type: string
+        tag_id:
+          type: integer
+          format: int64
+        rule_name:
+          type: string
+        component_id:
+          type: string
+        status:
+          type: string
+        message:
+          type: string
+        error_class:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        details: {}
+        created_at:
           type: string
           format: date-time
     PackageFormatRepository:
@@ -1642,7 +1915,7 @@ components:
           type: string
         support_status:
           type: string
-          enum: [indexed, discover_only, skipped, unsupported]
+          enum: [indexed, asset_indexed, skipped, unsupported]
         support_reason:
           type: string
         asset_count:

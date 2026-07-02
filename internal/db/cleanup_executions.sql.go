@@ -11,6 +11,103 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const acquireCleanupLock = `-- name: AcquireCleanupLock :one
+INSERT INTO nexus_cleanup_locks (
+  nexus_instance_id,
+  cleanup_execution_id,
+  lock_level,
+  reason
+)
+VALUES (
+  $1,
+  $2,
+  'exclusive',
+  $3
+)
+ON CONFLICT (nexus_instance_id) DO NOTHING
+RETURNING nexus_instance_id, cleanup_execution_id, lock_level, acquired_at, expires_at, reason
+`
+
+type AcquireCleanupLockParams struct {
+	NexusInstanceID    int64
+	CleanupExecutionID int64
+	Reason             pgtype.Text
+}
+
+func (q *Queries) AcquireCleanupLock(ctx context.Context, arg AcquireCleanupLockParams) (NexusCleanupLock, error) {
+	row := q.db.QueryRow(ctx, acquireCleanupLock, arg.NexusInstanceID, arg.CleanupExecutionID, arg.Reason)
+	var i NexusCleanupLock
+	err := row.Scan(
+		&i.NexusInstanceID,
+		&i.CleanupExecutionID,
+		&i.LockLevel,
+		&i.AcquiredAt,
+		&i.ExpiresAt,
+		&i.Reason,
+	)
+	return i, err
+}
+
+const claimQueuedCleanupExecution = `-- name: ClaimQueuedCleanupExecution :one
+WITH next_execution AS (
+  SELECT ce.id
+  FROM cleanup_executions ce
+  LEFT JOIN nexus_cleanup_locks cl ON cl.nexus_instance_id = ce.nexus_instance_id
+  LEFT JOIN nexus_operation_locks ol ON ol.nexus_instance_id = ce.nexus_instance_id
+  WHERE ce.status = 'queued'
+    AND ce.destructive_enabled
+    AND cl.nexus_instance_id IS NULL
+    AND ol.nexus_instance_id IS NULL
+  ORDER BY ce.created_at, ce.id
+  LIMIT 1
+  FOR UPDATE OF ce SKIP LOCKED
+)
+UPDATE cleanup_executions ce
+SET status = 'running',
+    started_at = COALESCE(ce.started_at, now()),
+    locked_by = $1,
+    lease_expires_at = now() + make_interval(secs => $2::int)
+WHERE ce.id = (SELECT id FROM next_execution)
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+`
+
+type ClaimQueuedCleanupExecutionParams struct {
+	WorkerID     pgtype.Text
+	LeaseSeconds int32
+}
+
+func (q *Queries) ClaimQueuedCleanupExecution(ctx context.Context, arg ClaimQueuedCleanupExecutionParams) (CleanupExecution, error) {
+	row := q.db.QueryRow(ctx, claimQueuedCleanupExecution, arg.WorkerID, arg.LeaseSeconds)
+	var i CleanupExecution
+	err := row.Scan(
+		&i.ID,
+		&i.NexusInstanceID,
+		&i.RepositoryName,
+		&i.PolicyName,
+		&i.PolicyYaml,
+		&i.Status,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.ApprovalText,
+		&i.DestructiveEnabled,
+		&i.SimulationSummary,
+		&i.AuditLog,
+		&i.PostDeleteVerificationRunID,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
+	)
+	return i, err
+}
+
 const createCleanupExecution = `-- name: CreateCleanupExecution :one
 INSERT INTO cleanup_executions (
   nexus_instance_id,
@@ -24,8 +121,12 @@ INSERT INTO cleanup_executions (
   destructive_enabled,
   simulation_summary,
   audit_log,
+  approved_candidates,
+  approved_candidate_count,
   post_delete_verification_run_id,
+  post_delete_reconcile_run_id,
   approved_at,
+  started_at,
   finished_at
 ) VALUES (
   $1,
@@ -41,9 +142,13 @@ INSERT INTO cleanup_executions (
   $11,
   $12,
   $13,
-  $14
+  $14,
+  $15,
+  $16,
+  $17,
+  $18
 )
-RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
 `
 
 type CreateCleanupExecutionParams struct {
@@ -58,8 +163,12 @@ type CreateCleanupExecutionParams struct {
 	DestructiveEnabled          bool
 	SimulationSummary           []byte
 	AuditLog                    []byte
+	ApprovedCandidates          []byte
+	ApprovedCandidateCount      int64
 	PostDeleteVerificationRunID pgtype.Int8
+	PostDeleteReconcileRunID    pgtype.Int8
 	ApprovedAt                  pgtype.Timestamptz
+	StartedAt                   pgtype.Timestamptz
 	FinishedAt                  pgtype.Timestamptz
 }
 
@@ -76,8 +185,12 @@ func (q *Queries) CreateCleanupExecution(ctx context.Context, arg CreateCleanupE
 		arg.DestructiveEnabled,
 		arg.SimulationSummary,
 		arg.AuditLog,
+		arg.ApprovedCandidates,
+		arg.ApprovedCandidateCount,
 		arg.PostDeleteVerificationRunID,
+		arg.PostDeleteReconcileRunID,
 		arg.ApprovedAt,
+		arg.StartedAt,
 		arg.FinishedAt,
 	)
 	var i CleanupExecution
@@ -98,12 +211,287 @@ func (q *Queries) CreateCleanupExecution(ctx context.Context, arg CreateCleanupE
 		&i.CreatedAt,
 		&i.ApprovedAt,
 		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
 	)
 	return i, err
 }
 
+const createCleanupExecutionEvent = `-- name: CreateCleanupExecutionEvent :one
+INSERT INTO cleanup_execution_events (
+  cleanup_execution_id,
+  event_type,
+  actor,
+  repository_name,
+  image_name,
+  tag,
+  tag_id,
+  rule_name,
+  component_id,
+  status,
+  message,
+  error_class,
+  error_code,
+  error_message,
+  details
+) VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5,
+  $6,
+  $7,
+  $8,
+  $9,
+  $10,
+  $11,
+  $12,
+  $13,
+  $14,
+  $15
+)
+RETURNING id, cleanup_execution_id, event_type, actor, repository_name, image_name, tag, tag_id, rule_name, component_id, status, message, error_class, error_code, error_message, details, created_at
+`
+
+type CreateCleanupExecutionEventParams struct {
+	CleanupExecutionID int64
+	EventType          string
+	Actor              pgtype.Text
+	RepositoryName     pgtype.Text
+	ImageName          pgtype.Text
+	Tag                pgtype.Text
+	TagID              pgtype.Int8
+	RuleName           pgtype.Text
+	ComponentID        pgtype.Text
+	Status             pgtype.Text
+	Message            pgtype.Text
+	ErrorClass         pgtype.Text
+	ErrorCode          pgtype.Text
+	ErrorMessage       pgtype.Text
+	Details            []byte
+}
+
+func (q *Queries) CreateCleanupExecutionEvent(ctx context.Context, arg CreateCleanupExecutionEventParams) (CleanupExecutionEvent, error) {
+	row := q.db.QueryRow(ctx, createCleanupExecutionEvent,
+		arg.CleanupExecutionID,
+		arg.EventType,
+		arg.Actor,
+		arg.RepositoryName,
+		arg.ImageName,
+		arg.Tag,
+		arg.TagID,
+		arg.RuleName,
+		arg.ComponentID,
+		arg.Status,
+		arg.Message,
+		arg.ErrorClass,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.Details,
+	)
+	var i CleanupExecutionEvent
+	err := row.Scan(
+		&i.ID,
+		&i.CleanupExecutionID,
+		&i.EventType,
+		&i.Actor,
+		&i.RepositoryName,
+		&i.ImageName,
+		&i.Tag,
+		&i.TagID,
+		&i.RuleName,
+		&i.ComponentID,
+		&i.Status,
+		&i.Message,
+		&i.ErrorClass,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Details,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const finishCleanupExecution = `-- name: FinishCleanupExecution :one
+UPDATE cleanup_executions
+SET status = $1,
+    simulation_summary = $2,
+    audit_log = $3,
+    post_delete_verification_run_id = $4,
+    post_delete_reconcile_run_id = $5,
+    finished_at = now(),
+    locked_by = NULL,
+    lease_expires_at = NULL
+WHERE id = $6
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+`
+
+type FinishCleanupExecutionParams struct {
+	Status                      string
+	SimulationSummary           []byte
+	AuditLog                    []byte
+	PostDeleteVerificationRunID pgtype.Int8
+	PostDeleteReconcileRunID    pgtype.Int8
+	ID                          int64
+}
+
+func (q *Queries) FinishCleanupExecution(ctx context.Context, arg FinishCleanupExecutionParams) (CleanupExecution, error) {
+	row := q.db.QueryRow(ctx, finishCleanupExecution,
+		arg.Status,
+		arg.SimulationSummary,
+		arg.AuditLog,
+		arg.PostDeleteVerificationRunID,
+		arg.PostDeleteReconcileRunID,
+		arg.ID,
+	)
+	var i CleanupExecution
+	err := row.Scan(
+		&i.ID,
+		&i.NexusInstanceID,
+		&i.RepositoryName,
+		&i.PolicyName,
+		&i.PolicyYaml,
+		&i.Status,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.ApprovalText,
+		&i.DestructiveEnabled,
+		&i.SimulationSummary,
+		&i.AuditLog,
+		&i.PostDeleteVerificationRunID,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
+	)
+	return i, err
+}
+
+const getCleanupExecution = `-- name: GetCleanupExecution :one
+SELECT id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+FROM cleanup_executions
+WHERE id = $1
+`
+
+func (q *Queries) GetCleanupExecution(ctx context.Context, id int64) (CleanupExecution, error) {
+	row := q.db.QueryRow(ctx, getCleanupExecution, id)
+	var i CleanupExecution
+	err := row.Scan(
+		&i.ID,
+		&i.NexusInstanceID,
+		&i.RepositoryName,
+		&i.PolicyName,
+		&i.PolicyYaml,
+		&i.Status,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.ApprovalText,
+		&i.DestructiveEnabled,
+		&i.SimulationSummary,
+		&i.AuditLog,
+		&i.PostDeleteVerificationRunID,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
+	)
+	return i, err
+}
+
+const getCleanupLock = `-- name: GetCleanupLock :one
+SELECT nexus_instance_id, cleanup_execution_id, lock_level, acquired_at, expires_at, reason
+FROM nexus_cleanup_locks
+WHERE nexus_instance_id = $1
+`
+
+func (q *Queries) GetCleanupLock(ctx context.Context, nexusInstanceID int64) (NexusCleanupLock, error) {
+	row := q.db.QueryRow(ctx, getCleanupLock, nexusInstanceID)
+	var i NexusCleanupLock
+	err := row.Scan(
+		&i.NexusInstanceID,
+		&i.CleanupExecutionID,
+		&i.LockLevel,
+		&i.AcquiredAt,
+		&i.ExpiresAt,
+		&i.Reason,
+	)
+	return i, err
+}
+
+const listCleanupExecutionEvents = `-- name: ListCleanupExecutionEvents :many
+SELECT id, cleanup_execution_id, event_type, actor, repository_name, image_name, tag, tag_id, rule_name, component_id, status, message, error_class, error_code, error_message, details, created_at
+FROM cleanup_execution_events
+WHERE cleanup_execution_id = $1
+ORDER BY created_at, id
+LIMIT $2
+`
+
+type ListCleanupExecutionEventsParams struct {
+	CleanupExecutionID int64
+	LimitCount         int32
+}
+
+func (q *Queries) ListCleanupExecutionEvents(ctx context.Context, arg ListCleanupExecutionEventsParams) ([]CleanupExecutionEvent, error) {
+	rows, err := q.db.Query(ctx, listCleanupExecutionEvents, arg.CleanupExecutionID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CleanupExecutionEvent
+	for rows.Next() {
+		var i CleanupExecutionEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.CleanupExecutionID,
+			&i.EventType,
+			&i.Actor,
+			&i.RepositoryName,
+			&i.ImageName,
+			&i.Tag,
+			&i.TagID,
+			&i.RuleName,
+			&i.ComponentID,
+			&i.Status,
+			&i.Message,
+			&i.ErrorClass,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.Details,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCleanupExecutions = `-- name: ListCleanupExecutions :many
-SELECT id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at
+SELECT id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
 FROM cleanup_executions
 WHERE ($1::bigint IS NULL OR nexus_instance_id = $1::bigint)
 ORDER BY created_at DESC
@@ -141,6 +529,14 @@ func (q *Queries) ListCleanupExecutions(ctx context.Context, arg ListCleanupExec
 			&i.CreatedAt,
 			&i.ApprovedAt,
 			&i.FinishedAt,
+			&i.ApprovedCandidates,
+			&i.ApprovedCandidateCount,
+			&i.StartedAt,
+			&i.LeaseExpiresAt,
+			&i.LockedBy,
+			&i.CancelRequestedAt,
+			&i.CanceledBy,
+			&i.PostDeleteReconcileRunID,
 		); err != nil {
 			return nil, err
 		}
@@ -150,4 +546,165 @@ func (q *Queries) ListCleanupExecutions(ctx context.Context, arg ListCleanupExec
 		return nil, err
 	}
 	return items, nil
+}
+
+const reclaimExpiredCleanupExecutions = `-- name: ReclaimExpiredCleanupExecutions :many
+UPDATE cleanup_executions
+SET status = 'queued',
+    locked_by = NULL,
+    lease_expires_at = NULL
+WHERE status = 'running'
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at < now()
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+`
+
+func (q *Queries) ReclaimExpiredCleanupExecutions(ctx context.Context) ([]CleanupExecution, error) {
+	rows, err := q.db.Query(ctx, reclaimExpiredCleanupExecutions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CleanupExecution
+	for rows.Next() {
+		var i CleanupExecution
+		if err := rows.Scan(
+			&i.ID,
+			&i.NexusInstanceID,
+			&i.RepositoryName,
+			&i.PolicyName,
+			&i.PolicyYaml,
+			&i.Status,
+			&i.RequestedBy,
+			&i.ApprovedBy,
+			&i.ApprovalText,
+			&i.DestructiveEnabled,
+			&i.SimulationSummary,
+			&i.AuditLog,
+			&i.PostDeleteVerificationRunID,
+			&i.CreatedAt,
+			&i.ApprovedAt,
+			&i.FinishedAt,
+			&i.ApprovedCandidates,
+			&i.ApprovedCandidateCount,
+			&i.StartedAt,
+			&i.LeaseExpiresAt,
+			&i.LockedBy,
+			&i.CancelRequestedAt,
+			&i.CanceledBy,
+			&i.PostDeleteReconcileRunID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const releaseCleanupLockByExecution = `-- name: ReleaseCleanupLockByExecution :exec
+DELETE FROM nexus_cleanup_locks
+WHERE cleanup_execution_id = $1
+`
+
+func (q *Queries) ReleaseCleanupLockByExecution(ctx context.Context, cleanupExecutionID int64) error {
+	_, err := q.db.Exec(ctx, releaseCleanupLockByExecution, cleanupExecutionID)
+	return err
+}
+
+const requestCleanupExecutionCancel = `-- name: RequestCleanupExecutionCancel :one
+UPDATE cleanup_executions
+SET status = CASE WHEN status = 'queued' THEN 'canceled' ELSE 'cancel_requested' END,
+    cancel_requested_at = now(),
+    canceled_by = $1,
+    finished_at = CASE WHEN status = 'queued' THEN now() ELSE finished_at END,
+    locked_by = CASE WHEN status = 'queued' THEN NULL ELSE locked_by END,
+    lease_expires_at = CASE WHEN status = 'queued' THEN NULL ELSE lease_expires_at END
+WHERE id = $2
+  AND status IN ('queued', 'running')
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+`
+
+type RequestCleanupExecutionCancelParams struct {
+	CanceledBy pgtype.Text
+	ID         int64
+}
+
+func (q *Queries) RequestCleanupExecutionCancel(ctx context.Context, arg RequestCleanupExecutionCancelParams) (CleanupExecution, error) {
+	row := q.db.QueryRow(ctx, requestCleanupExecutionCancel, arg.CanceledBy, arg.ID)
+	var i CleanupExecution
+	err := row.Scan(
+		&i.ID,
+		&i.NexusInstanceID,
+		&i.RepositoryName,
+		&i.PolicyName,
+		&i.PolicyYaml,
+		&i.Status,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.ApprovalText,
+		&i.DestructiveEnabled,
+		&i.SimulationSummary,
+		&i.AuditLog,
+		&i.PostDeleteVerificationRunID,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
+	)
+	return i, err
+}
+
+const touchCleanupExecutionLease = `-- name: TouchCleanupExecutionLease :one
+UPDATE cleanup_executions
+SET lease_expires_at = now() + make_interval(secs => $1::int)
+WHERE id = $2
+  AND status IN ('running', 'cancel_requested')
+RETURNING id, nexus_instance_id, repository_name, policy_name, policy_yaml, status, requested_by, approved_by, approval_text, destructive_enabled, simulation_summary, audit_log, post_delete_verification_run_id, created_at, approved_at, finished_at, approved_candidates, approved_candidate_count, started_at, lease_expires_at, locked_by, cancel_requested_at, canceled_by, post_delete_reconcile_run_id
+`
+
+type TouchCleanupExecutionLeaseParams struct {
+	LeaseSeconds int32
+	ID           int64
+}
+
+func (q *Queries) TouchCleanupExecutionLease(ctx context.Context, arg TouchCleanupExecutionLeaseParams) (CleanupExecution, error) {
+	row := q.db.QueryRow(ctx, touchCleanupExecutionLease, arg.LeaseSeconds, arg.ID)
+	var i CleanupExecution
+	err := row.Scan(
+		&i.ID,
+		&i.NexusInstanceID,
+		&i.RepositoryName,
+		&i.PolicyName,
+		&i.PolicyYaml,
+		&i.Status,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.ApprovalText,
+		&i.DestructiveEnabled,
+		&i.SimulationSummary,
+		&i.AuditLog,
+		&i.PostDeleteVerificationRunID,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+		&i.FinishedAt,
+		&i.ApprovedCandidates,
+		&i.ApprovedCandidateCount,
+		&i.StartedAt,
+		&i.LeaseExpiresAt,
+		&i.LockedBy,
+		&i.CancelRequestedAt,
+		&i.CanceledBy,
+		&i.PostDeleteReconcileRunID,
+	)
+	return i, err
 }

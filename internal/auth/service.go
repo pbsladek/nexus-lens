@@ -20,8 +20,9 @@ const (
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
 type User struct {
-	Username string
-	Role     string
+	Username     string
+	Role         string
+	Capabilities []string
 }
 
 type Service struct {
@@ -102,7 +103,7 @@ func (s *Service) AuthenticateSession(ctx context.Context, token string) (User, 
 		}
 		return User{}, fmt.Errorf("load app session: %w", err)
 	}
-	return User{Username: session.Username, Role: session.Role}, nil
+	return User{Username: session.Username, Role: session.Role, Capabilities: session.Capabilities}, nil
 }
 
 func (s *Service) RevokeSession(ctx context.Context, token string) error {
@@ -115,27 +116,27 @@ func (s *Service) RevokeSession(ctx context.Context, token string) error {
 	return nil
 }
 
-func (s *Service) authenticateRow(ctx context.Context, username, password string) (db.AppUser, User, error) {
+func (s *Service) authenticateRow(ctx context.Context, username, password string) (db.GetActiveAppUserByUsernameRow, User, error) {
 	if username == "" || password == "" {
-		return db.AppUser{}, User{}, ErrInvalidCredentials
+		return db.GetActiveAppUserByUsernameRow{}, User{}, ErrInvalidCredentials
 	}
 
 	user, err := s.queries.GetActiveAppUserByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return db.AppUser{}, User{}, ErrInvalidCredentials
+			return db.GetActiveAppUserByUsernameRow{}, User{}, ErrInvalidCredentials
 		}
-		return db.AppUser{}, User{}, fmt.Errorf("load app user: %w", err)
+		return db.GetActiveAppUserByUsernameRow{}, User{}, fmt.Errorf("load app user: %w", err)
 	}
 
 	ok, err := VerifyPassword(user.PasswordHash, password)
 	if err != nil {
 		s.logger.Warn("stored password hash could not be verified", "username", username, "error", err)
-		return db.AppUser{}, User{}, ErrInvalidCredentials
+		return db.GetActiveAppUserByUsernameRow{}, User{}, ErrInvalidCredentials
 	}
 	if !ok {
-		return db.AppUser{}, User{}, ErrInvalidCredentials
+		return db.GetActiveAppUserByUsernameRow{}, User{}, ErrInvalidCredentials
 	}
 
-	return user, User{Username: user.Username, Role: user.Role}, nil
+	return user, User{Username: user.Username, Role: user.Role, Capabilities: user.Capabilities}, nil
 }

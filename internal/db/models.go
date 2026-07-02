@@ -8,6 +8,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AppRetentionSetting struct {
+	ID                      bool
+	IntervalSeconds         pgtype.Int4
+	ScanRunDays             pgtype.Int4
+	CleanupExecutionDays    pgtype.Int4
+	VerificationFindingDays pgtype.Int4
+	TrendSnapshotDays       pgtype.Int4
+	UpdatedBy               pgtype.Text
+	UpdatedAt               pgtype.Timestamptz
+}
+
+type AppRole struct {
+	Name         string
+	DisplayName  string
+	Capabilities []string
+	BuiltIn      bool
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
 type AppSession struct {
 	ID        int64
 	UserID    int64
@@ -44,6 +64,34 @@ type CleanupExecution struct {
 	CreatedAt                   pgtype.Timestamptz
 	ApprovedAt                  pgtype.Timestamptz
 	FinishedAt                  pgtype.Timestamptz
+	ApprovedCandidates          []byte
+	ApprovedCandidateCount      int64
+	StartedAt                   pgtype.Timestamptz
+	LeaseExpiresAt              pgtype.Timestamptz
+	LockedBy                    pgtype.Text
+	CancelRequestedAt           pgtype.Timestamptz
+	CanceledBy                  pgtype.Text
+	PostDeleteReconcileRunID    pgtype.Int8
+}
+
+type CleanupExecutionEvent struct {
+	ID                 int64
+	CleanupExecutionID int64
+	EventType          string
+	Actor              pgtype.Text
+	RepositoryName     pgtype.Text
+	ImageName          pgtype.Text
+	Tag                pgtype.Text
+	TagID              pgtype.Int8
+	RuleName           pgtype.Text
+	ComponentID        pgtype.Text
+	Status             pgtype.Text
+	Message            pgtype.Text
+	ErrorClass         pgtype.Text
+	ErrorCode          pgtype.Text
+	ErrorMessage       pgtype.Text
+	Details            []byte
+	CreatedAt          pgtype.Timestamptz
 }
 
 type ContainerImage struct {
@@ -166,6 +214,15 @@ type NexusAsset struct {
 	FirstSeenAt      pgtype.Timestamptz
 	LastSeenAt       pgtype.Timestamptz
 	Metadata         []byte
+}
+
+type NexusCleanupLock struct {
+	NexusInstanceID    int64
+	CleanupExecutionID int64
+	LockLevel          string
+	AcquiredAt         pgtype.Timestamptz
+	ExpiresAt          pgtype.Timestamptz
+	Reason             pgtype.Text
 }
 
 type NexusIndexingControl struct {

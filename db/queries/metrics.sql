@@ -22,3 +22,22 @@ ORDER BY severity;
 SELECT COALESCE(EXTRACT(EPOCH FROM now() - MIN(available_at)), 0)::bigint AS age_seconds
 FROM scan_tasks
 WHERE status IN ('pending', 'retryable');
+
+-- name: CountCleanupExecutionsByStatus :many
+SELECT status, count(*)::bigint AS count
+FROM cleanup_executions
+GROUP BY status
+ORDER BY status;
+
+-- name: CountCleanupExecutionEvents24h :many
+SELECT event_type, status, count(*)::bigint AS count
+FROM cleanup_execution_events
+WHERE created_at >= now() - interval '24 hours'
+GROUP BY event_type, status
+ORDER BY event_type, status;
+
+-- name: GetOldestRunningCleanupAgeSeconds :one
+SELECT COALESCE(EXTRACT(EPOCH FROM now() - MIN(started_at)), 0)::bigint AS age_seconds
+FROM cleanup_executions
+WHERE status IN ('running', 'cancel_requested')
+  AND started_at IS NOT NULL;

@@ -1,13 +1,27 @@
 image:
-  repository: ghcr.io/example/nexus-lens
   tag: dev
+  pullPolicy: IfNotPresent
 
 api:
   replicas: 1
   port: 5601
+  image:
+    repository: ghcr.io/example/nexus-lens-api
+    tag: ""
+    pullPolicy: ""
 
 worker:
   replicas: 1
+  image:
+    repository: ghcr.io/example/nexus-lens-worker
+    tag: ""
+    pullPolicy: ""
+  retention:
+    intervalSeconds: 3600
+    scanRunDays: 30
+    cleanupExecutionDays: 365
+    verificationFindingDays: 180
+    trendSnapshotDays: 365
 
 nexus:
   credentials:
@@ -51,3 +65,5 @@ metrics:
     queueAgeSeconds: 1800
     failedRuns24h: 1
     highVerificationFindings: 1
+    cleanupRunningAgeSeconds: 3600
+    cleanupFailedExecutions: 1

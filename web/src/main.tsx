@@ -2,14 +2,18 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   cancelIndexRun,
+  cancelCleanupExecution,
   dismissVerificationFinding,
   getAnalyticsOverview,
   getHealth,
   getMe,
+  getRetentionSettings,
   listImageAnalytics,
   listIndexTasks,
   listIndexRuns,
   listIndexingSchedules,
+  listCleanupExecutionEvents,
+  listCleanupExecutions,
   listNexusInstances,
   listPackageFormatRepositories,
   listRepositoryAnalytics,
@@ -32,6 +36,7 @@ import {
   startTagReclassification,
   startIndexRun,
   updateNexusRateLimits,
+  updateRetentionSettings,
   upsertIndexingSchedule,
   upsertTagPattern,
   type AnalyticsOverview,
@@ -39,6 +44,7 @@ import {
   type CleanupSimulationResult,
   type CleanupSimulationTag,
   type CleanupExecution,
+  type CleanupExecutionEvent,
   type ImageAnalytics,
   type IndexingSchedule,
   type IndexingControl,
@@ -47,6 +53,7 @@ import {
   type NexusInstance,
   type PackageFormatRepository,
   type RateLimitSettings,
+  type RetentionSettings,
   type RepositoryAnalytics,
   type StartIndexRunRequest,
   type TagAnalytics,
@@ -113,6 +120,14 @@ function App() {
   const [rateAssetListRPS, setRateAssetListRPS] = useState("4");
   const [rateRegistryManifestRPS, setRateRegistryManifestRPS] = useState("2");
   const [rateDefaultRPS, setRateDefaultRPS] = useState("8");
+  const [retentionIntervalSeconds, setRetentionIntervalSeconds] = useState(3600);
+  const [retentionScanRunDays, setRetentionScanRunDays] = useState(30);
+  const [retentionCleanupExecutionDays, setRetentionCleanupExecutionDays] = useState(365);
+  const [retentionVerificationFindingDays, setRetentionVerificationFindingDays] = useState(180);
+  const [retentionTrendSnapshotDays, setRetentionTrendSnapshotDays] = useState(365);
+  const [retentionConfigured, setRetentionConfigured] = useState(false);
+  const [retentionUpdatedBy, setRetentionUpdatedBy] = useState("");
+  const [retentionUpdatedAt, setRetentionUpdatedAt] = useState("");
   const [analyticsStatus, setAnalyticsStatus] = useState("not loaded");
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [repositoryRows, setRepositoryRows] = useState<RepositoryAnalytics[]>([]);
@@ -150,8 +165,15 @@ function App() {
   const [cleanupResult, setCleanupResult] = useState<CleanupSimulationResult | null>(null);
   const [cleanupApprovalText, setCleanupApprovalText] = useState("");
   const [cleanupExecution, setCleanupExecution] = useState<CleanupExecution | null>(null);
+  const [cleanupExecutions, setCleanupExecutions] = useState<CleanupExecution[]>([]);
+  const [cleanupEvents, setCleanupEvents] = useState<CleanupExecutionEvent[]>([]);
+  const [selectedCleanupExecutionID, setSelectedCleanupExecutionID] = useState(0);
 
-  const isAdmin = user?.role === "admin";
+  const canManageIndex = hasCapability(user, "manage_index");
+  const canManageSettings = hasCapability(user, "manage_settings");
+  const canManageTagPatterns = hasCapability(user, "manage_tag_patterns");
+  const canManageFindings = hasCapability(user, "manage_findings");
+  const canExecuteCleanup = hasCapability(user, "execute_cleanup");
   const isExclusiveRun = scanType === "bounded_reindex" || scanType === "full_reconcile";
   const trendUsesPattern = trendMetricName.startsWith("tag_pattern_");
   const trendMaxValue = Math.max(
@@ -210,6 +232,9 @@ function App() {
       setTrendMovers([]);
       setCleanupResult(null);
       setCleanupExecution(null);
+      setCleanupExecutions([]);
+      setCleanupEvents([]);
+      setSelectedCleanupExecutionID(0);
       setRunsStatus("signed out");
       setFindingsStatus("signed out");
       setSettingsStatus("signed out");
@@ -227,6 +252,7 @@ function App() {
     void refreshPackageFormats();
     void refreshPatterns();
     void refreshTrends();
+    void refreshCleanupExecutions();
   }, [user]);
 
   async function refreshRuns() {
@@ -270,16 +296,18 @@ function App() {
   async function refreshSettings() {
     setSettingsStatus("loading");
     try {
-      const [instanceResponse, scheduleResponse] = await Promise.all([
-        listNexusInstances(),
-        listIndexingSchedules(controlNexusID > 0 ? controlNexusID : undefined),
+      const [instanceResponse, scheduleResponse, retentionResponse] = await Promise.all([
+        listNexusInstances(100),
+        listIndexingSchedules(controlNexusID > 0 ? controlNexusID : undefined, 100),
+        getRetentionSettings(),
       ]);
       setInstances(instanceResponse.instances ?? []);
       setSchedules(scheduleResponse.schedules ?? []);
+      applyRetentionSettings(retentionResponse);
       if ((instanceResponse.instances ?? []).length > 0) {
         const first = instanceResponse.instances[0];
         setControlNexusID((current) => (current > 0 ? current : first.id));
-      setAnalyticsNexusID((current) => (current > 0 ? current : first.id));
+        setAnalyticsNexusID((current) => (current > 0 ? current : first.id));
         setNexusName((current) => current || first.name);
         setBaseURL((current) => current || first.base_url);
       }
@@ -289,6 +317,17 @@ function App() {
       setSchedules([]);
       setSettingsStatus("failed");
     }
+  }
+
+  function applyRetentionSettings(settings: RetentionSettings) {
+    setRetentionIntervalSeconds(settings.interval_seconds);
+    setRetentionScanRunDays(settings.scan_run_days);
+    setRetentionCleanupExecutionDays(settings.cleanup_execution_days);
+    setRetentionVerificationFindingDays(settings.verification_finding_days);
+    setRetentionTrendSnapshotDays(settings.trend_snapshot_days);
+    setRetentionConfigured(settings.configured);
+    setRetentionUpdatedBy(settings.updated_by ?? "");
+    setRetentionUpdatedAt(settings.updated_at ?? "");
   }
 
   async function refreshPatterns() {
@@ -304,7 +343,7 @@ function App() {
         limit: 50,
       };
       const [definitionResponse, analyticsResponse, growthResponse, examplesResponse, suggestionsResponse] = await Promise.all([
-        listTagPatterns(),
+        listTagPatterns(100),
         listTagPatternAnalytics(options),
         listTagPatternGrowth(options),
         listTagPatternExamples(options),
@@ -514,10 +553,55 @@ function App() {
         limit: 1000,
       });
       setCleanupExecution(execution);
+      setSelectedCleanupExecutionID(execution.id);
       setCleanupStatus(`execution ${execution.status}`);
+      await refreshCleanupExecutions(execution.id);
     } catch (error) {
       setCleanupExecution(null);
       setCleanupStatus(error instanceof Error ? error.message : "execution request failed");
+    }
+  }
+
+  async function refreshCleanupExecutions(selectID = selectedCleanupExecutionID) {
+    try {
+      const response = await listCleanupExecutions({
+        nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
+        limit: 25,
+      });
+      const rows = response.executions ?? [];
+      setCleanupExecutions(rows);
+      const nextID = selectID || rows[0]?.id || 0;
+      setSelectedCleanupExecutionID(nextID);
+      if (nextID > 0) {
+        const eventsResponse = await listCleanupExecutionEvents(nextID, 200);
+        setCleanupEvents(eventsResponse.events ?? []);
+      } else {
+        setCleanupEvents([]);
+      }
+    } catch {
+      setCleanupExecutions([]);
+      setCleanupEvents([]);
+    }
+  }
+
+  async function handleSelectCleanupExecution(executionID: number) {
+    setSelectedCleanupExecutionID(executionID);
+    try {
+      const eventsResponse = await listCleanupExecutionEvents(executionID, 200);
+      setCleanupEvents(eventsResponse.events ?? []);
+    } catch {
+      setCleanupEvents([]);
+    }
+  }
+
+  async function handleCancelCleanupExecution(executionID: number) {
+    try {
+      const execution = await cancelCleanupExecution(executionID);
+      setCleanupExecution(execution);
+      setCleanupStatus(`execution ${execution.status}`);
+      await refreshCleanupExecutions(executionID);
+    } catch (error) {
+      setCleanupStatus(error instanceof Error ? error.message : "cancel request failed");
     }
   }
 
@@ -526,7 +610,7 @@ function App() {
     setAuthStatus("signing in");
     try {
       const session = await login({ username, password });
-      setUser({ username: session.username, role: session.role });
+      setUser({ username: session.username, role: session.role, capabilities: session.capabilities });
       setPassword("");
       setAuthStatus("signed in");
     } catch {
@@ -696,6 +780,26 @@ function App() {
       setRunMessage(`saved rate limits for Nexus ${controlNexusID}`);
     } catch (error) {
       setRunMessage(error instanceof Error ? error.message : "rate limit save failed");
+    }
+  }
+
+  async function handleSaveRetentionSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const request: RetentionSettings = {
+      interval_seconds: retentionIntervalSeconds,
+      scan_run_days: retentionScanRunDays,
+      cleanup_execution_days: retentionCleanupExecutionDays,
+      verification_finding_days: retentionVerificationFindingDays,
+      trend_snapshot_days: retentionTrendSnapshotDays,
+      configured: retentionConfigured,
+    };
+    setRunMessage("saving retention settings");
+    try {
+      const next = await updateRetentionSettings(request);
+      applyRetentionSettings(next);
+      setRunMessage("saved retention settings");
+    } catch (error) {
+      setRunMessage(error instanceof Error ? error.message : "retention settings save failed");
     }
   }
 
@@ -1383,12 +1487,12 @@ function App() {
             />
             Enabled
           </label>
-          <button type="submit" disabled={!isAdmin}>
+          <button type="submit" disabled={!canManageTagPatterns}>
             Save pattern
           </button>
         </form>
         <div className="control-form">
-          <button type="button" disabled={!isAdmin || analyticsNexusID <= 0} onClick={handleStartTagReclassification}>
+          <button type="button" disabled={!canManageTagPatterns || analyticsNexusID <= 0} onClick={handleStartTagReclassification}>
             Reclassify
           </button>
           <p className="run-message">
@@ -1446,7 +1550,7 @@ function App() {
               onChange={(event) => setCleanupApprovalText(event.target.value)}
             />
           </label>
-          <button type="button" disabled={!isAdmin || !cleanupResult} onClick={handleRequestCleanupExecution}>
+          <button type="button" disabled={!canExecuteCleanup || !cleanupResult} onClick={handleRequestCleanupExecution}>
             Request execution
           </button>
           <p className="run-message">
@@ -1458,6 +1562,96 @@ function App() {
             Execution {cleanupExecution.id}: {cleanupExecution.status}
           </p>
         ) : null}
+        <div className="queue-header">
+          <h3>Executions</h3>
+          <button type="button" disabled={!user} onClick={() => void refreshCleanupExecutions()}>
+            Refresh executions
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Candidates</th>
+                <th>Deleted</th>
+                <th>Worker</th>
+                <th>Follow-up</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {cleanupExecutions.length ? (
+                cleanupExecutions.map((execution) => {
+                  const summary = cleanupSummary(execution);
+                  const running = execution.status === "queued" || execution.status === "running";
+                  return (
+                    <tr key={execution.id}>
+                      <td>{execution.id}</td>
+                      <td>{execution.status}</td>
+                      <td>{execution.approved_candidate_count ?? summary.candidate_tag_count ?? 0}</td>
+                      <td>{summary.deleted_count ?? 0}</td>
+                      <td>{execution.locked_by || ""}</td>
+                      <td>
+                        {execution.post_delete_reconcile_run_id ? `reconcile ${execution.post_delete_reconcile_run_id}` : ""}
+                        {execution.post_delete_verification_run_id ? ` verification ${execution.post_delete_verification_run_id}` : ""}
+                      </td>
+                      <td>
+                        <button type="button" className="link-button" onClick={() => void handleSelectCleanupExecution(execution.id)}>
+                          Events
+                        </button>
+                        <button
+                          type="button"
+                          className="link-button"
+                          disabled={!canExecuteCleanup || !running}
+                          onClick={() => void handleCancelCleanupExecution(execution.id)}
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7}>No cleanup executions.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <h3>Execution events</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Event</th>
+                <th>Status</th>
+                <th>Tag</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cleanupEvents.length ? (
+                cleanupEvents.map((event) => (
+                  <tr key={event.id}>
+                    <td>{formatDate(event.created_at)}</td>
+                    <td>{event.event_type}</td>
+                    <td>{event.status ?? ""}</td>
+                    <td>{event.repository_name && event.image_name && event.tag ? `${event.repository_name}/${event.image_name}:${event.tag}` : ""}</td>
+                    <td>{event.message ?? event.error_message ?? ""}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5}>{selectedCleanupExecutionID ? "No events." : "Select an execution."}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
         <h3>Candidates</h3>
         <div className="table-wrap">
           <table>
@@ -1627,7 +1821,7 @@ function App() {
                 This operation will block other indexing for this Nexus until it finishes.
               </p>
             ) : null}
-            <button type="submit" disabled={!isAdmin}>
+            <button type="submit" disabled={!canManageIndex}>
               Start
             </button>
           </form>
@@ -1645,10 +1839,10 @@ function App() {
               Pause reason
               <input value={pauseReason} onChange={(event) => setPauseReason(event.target.value)} />
             </label>
-            <button type="button" disabled={!isAdmin} onClick={handlePauseIndexing}>
+            <button type="button" disabled={!canManageIndex} onClick={handlePauseIndexing}>
               Pause
             </button>
-            <button type="button" disabled={!isAdmin} onClick={handleResumeIndexing}>
+            <button type="button" disabled={!canManageIndex} onClick={handleResumeIndexing}>
               Resume
             </button>
           </div>
@@ -1704,7 +1898,7 @@ function App() {
                     <td>
                       <button
                         type="button"
-                        disabled={!isAdmin || run.status !== "running"}
+                        disabled={!canManageIndex || run.status !== "running"}
                         onClick={() => handleCancelRun(run.id)}
                       >
                         Cancel
@@ -1765,7 +1959,7 @@ function App() {
                     <td>
                       <button
                         type="button"
-                        disabled={!isAdmin || (task.status !== "failed" && task.status !== "retryable")}
+                        disabled={!canManageIndex || (task.status !== "failed" && task.status !== "retryable")}
                         onClick={() => handleRetryTask(task.id)}
                       >
                         Retry
@@ -1859,7 +2053,7 @@ function App() {
             />
             Run when due
           </label>
-          <button type="submit" disabled={!isAdmin}>
+          <button type="submit" disabled={!canManageSettings}>
             Save schedule
           </button>
         </form>
@@ -1879,9 +2073,66 @@ function App() {
             Default RPS
             <input value={rateDefaultRPS} onChange={(event) => setRateDefaultRPS(event.target.value)} />
           </label>
-          <button type="submit" disabled={!isAdmin || controlNexusID <= 0}>
+          <button type="submit" disabled={!canManageSettings || controlNexusID <= 0}>
             Save rate limits
           </button>
+        </form>
+        <form className="settings-form" onSubmit={handleSaveRetentionSettings}>
+          <label>
+            Retention interval seconds
+            <input
+              min="60"
+              type="number"
+              value={retentionIntervalSeconds}
+              onChange={(event) => setRetentionIntervalSeconds(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Scan run days
+            <input
+              min="1"
+              type="number"
+              value={retentionScanRunDays}
+              onChange={(event) => setRetentionScanRunDays(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Cleanup execution days
+            <input
+              min="1"
+              type="number"
+              value={retentionCleanupExecutionDays}
+              onChange={(event) => setRetentionCleanupExecutionDays(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Closed finding days
+            <input
+              min="1"
+              type="number"
+              value={retentionVerificationFindingDays}
+              onChange={(event) => setRetentionVerificationFindingDays(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            Trend snapshot days
+            <input
+              min="1"
+              type="number"
+              value={retentionTrendSnapshotDays}
+              onChange={(event) => setRetentionTrendSnapshotDays(Number(event.target.value))}
+            />
+          </label>
+          <button type="submit" disabled={!canManageSettings}>
+            Save retention
+          </button>
+          <p>
+            {retentionConfigured
+              ? `Database override${retentionUpdatedBy ? ` by ${retentionUpdatedBy}` : ""}${
+                  retentionUpdatedAt ? ` at ${new Date(retentionUpdatedAt).toLocaleString()}` : ""
+                }`
+              : "Using deployment defaults"}
+          </p>
         </form>
         <div className="table-wrap">
           <table>
@@ -1954,7 +2205,7 @@ function App() {
                     <td>
                       <button
                         type="button"
-                        disabled={!isAdmin}
+                        disabled={!canManageFindings}
                         onClick={() => handleDismissFinding(finding.id)}
                       >
                         Dismiss
@@ -2047,6 +2298,23 @@ function formatSignedMetricValue(metricName: string, value: number): string {
 
 function formatDate(value?: string): string {
   return value ? new Date(value).toLocaleString() : "";
+}
+
+function cleanupSummary(execution: CleanupExecution): Record<string, number> {
+  if (!execution.simulation_summary || typeof execution.simulation_summary !== "object") {
+    return {};
+  }
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(execution.simulation_summary)) {
+    if (typeof value === "number") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function hasCapability(user: AppUser | null, capability: string): boolean {
+  return Boolean(user?.capabilities?.includes(capability));
 }
 
 createRoot(document.getElementById("root")!).render(

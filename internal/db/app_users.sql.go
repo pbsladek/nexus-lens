@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countAppUsers = `-- name: CountAppUsers :one
@@ -48,23 +50,108 @@ func (q *Queries) CreateAppUser(ctx context.Context, arg CreateAppUserParams) (A
 }
 
 const getActiveAppUserByUsername = `-- name: GetActiveAppUserByUsername :one
-SELECT id, username, password_hash, role, created_at, updated_at, disabled_at
-FROM app_users
-WHERE username = $1
-  AND disabled_at IS NULL
+SELECT
+  u.id,
+  u.username,
+  u.password_hash,
+  u.role,
+  r.capabilities,
+  u.created_at,
+  u.updated_at,
+  u.disabled_at
+FROM app_users u
+JOIN app_roles r ON r.name = u.role
+WHERE u.username = $1
+  AND u.disabled_at IS NULL
 `
 
-func (q *Queries) GetActiveAppUserByUsername(ctx context.Context, username string) (AppUser, error) {
+type GetActiveAppUserByUsernameRow struct {
+	ID           int64
+	Username     string
+	PasswordHash string
+	Role         string
+	Capabilities []string
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+	DisabledAt   pgtype.Timestamptz
+}
+
+func (q *Queries) GetActiveAppUserByUsername(ctx context.Context, username string) (GetActiveAppUserByUsernameRow, error) {
 	row := q.db.QueryRow(ctx, getActiveAppUserByUsername, username)
-	var i AppUser
+	var i GetActiveAppUserByUsernameRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
 		&i.PasswordHash,
 		&i.Role,
+		&i.Capabilities,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DisabledAt,
+	)
+	return i, err
+}
+
+const listAppRoles = `-- name: ListAppRoles :many
+SELECT name, display_name, capabilities, built_in, created_at, updated_at
+FROM app_roles
+ORDER BY built_in DESC, name
+`
+
+func (q *Queries) ListAppRoles(ctx context.Context) ([]AppRole, error) {
+	rows, err := q.db.Query(ctx, listAppRoles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AppRole
+	for rows.Next() {
+		var i AppRole
+		if err := rows.Scan(
+			&i.Name,
+			&i.DisplayName,
+			&i.Capabilities,
+			&i.BuiltIn,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertAppRole = `-- name: UpsertAppRole :one
+INSERT INTO app_roles (name, display_name, capabilities, built_in, updated_at)
+VALUES ($1, $2, $3, false, now())
+ON CONFLICT (name) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    capabilities = EXCLUDED.capabilities,
+    updated_at = now()
+WHERE app_roles.built_in = false
+RETURNING name, display_name, capabilities, built_in, created_at, updated_at
+`
+
+type UpsertAppRoleParams struct {
+	Name         string
+	DisplayName  string
+	Capabilities []string
+}
+
+func (q *Queries) UpsertAppRole(ctx context.Context, arg UpsertAppRoleParams) (AppRole, error) {
+	row := q.db.QueryRow(ctx, upsertAppRole, arg.Name, arg.DisplayName, arg.Capabilities)
+	var i AppRole
+	err := row.Scan(
+		&i.Name,
+		&i.DisplayName,
+		&i.Capabilities,
+		&i.BuiltIn,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

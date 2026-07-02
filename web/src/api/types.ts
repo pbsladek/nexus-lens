@@ -132,6 +132,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/retention-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRetentionSettings"];
+        put: operations["updateRetentionSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/index/runs": {
         parameters: {
             query?: never;
@@ -283,9 +299,41 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["listCleanupExecutions"];
         put?: never;
         post: operations["requestCleanupExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cleanup/executions/{cleanup_execution_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelCleanupExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cleanup/executions/{cleanup_execution_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCleanupExecutionEvents"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -511,6 +559,7 @@ export interface components {
             username: string;
             /** @enum {string} */
             role: "admin" | "read_only";
+            capabilities: string[];
         };
         LoginRequest: {
             username: string;
@@ -521,6 +570,7 @@ export interface components {
             username: string;
             /** @enum {string} */
             role: "admin" | "read_only";
+            capabilities: string[];
             /** Format: date-time */
             expires_at: string;
         };
@@ -588,6 +638,22 @@ export interface components {
             asset_list_rps?: number;
             registry_manifest_rps?: number;
             default_rps?: number;
+        };
+        RetentionSettings: {
+            /** Format: int32 */
+            interval_seconds: number;
+            /** Format: int32 */
+            scan_run_days: number;
+            /** Format: int32 */
+            cleanup_execution_days: number;
+            /** Format: int32 */
+            verification_finding_days: number;
+            /** Format: int32 */
+            trend_snapshot_days: number;
+            updated_by?: string;
+            /** Format: date-time */
+            updated_at?: string;
+            configured: boolean;
         };
         AnalyticsOverview: {
             /** Format: int64 */
@@ -670,6 +736,7 @@ export interface components {
             repository_name: string;
             image_name: string;
             tag: string;
+            digest: string;
             pattern_name: string;
             rule_name?: string;
             reason?: string;
@@ -711,13 +778,48 @@ export interface components {
             simulation_summary: unknown;
             audit_log: unknown;
             /** Format: int64 */
+            approved_candidate_count: number;
+            /** Format: int64 */
             post_delete_verification_run_id?: number;
+            /** Format: int64 */
+            post_delete_reconcile_run_id?: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             approved_at?: string;
             /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
             finished_at?: string;
+            /** Format: date-time */
+            lease_expires_at?: string;
+            locked_by?: string;
+            /** Format: date-time */
+            cancel_requested_at?: string;
+            canceled_by?: string;
+        };
+        CleanupExecutionEvent: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            cleanup_execution_id: number;
+            event_type: string;
+            actor?: string;
+            repository_name?: string;
+            image_name?: string;
+            tag?: string;
+            /** Format: int64 */
+            tag_id?: number;
+            rule_name?: string;
+            component_id?: string;
+            status?: string;
+            message?: string;
+            error_class?: string;
+            error_code?: string;
+            error_message?: string;
+            details?: unknown;
+            /** Format: date-time */
+            created_at: string;
         };
         PackageFormatRepository: {
             /** Format: int64 */
@@ -729,7 +831,7 @@ export interface components {
             format: string;
             type: string;
             /** @enum {string} */
-            support_status: "indexed" | "discover_only" | "skipped" | "unsupported";
+            support_status: "indexed" | "asset_indexed" | "skipped" | "unsupported";
             support_reason: string;
             /** Format: int64 */
             asset_count: number;
@@ -1184,7 +1286,9 @@ export interface operations {
     };
     listNexusInstances: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1217,6 +1321,7 @@ export interface operations {
         parameters: {
             query?: {
                 nexus_instance_id?: number;
+                limit?: components["parameters"]["Limit"];
             };
             header?: never;
             path?: never;
@@ -1341,9 +1446,91 @@ export interface operations {
             };
         };
     };
-    listIndexRuns: {
+    getRetentionSettings: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective retention settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionSettings"];
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateRetentionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetentionSettings"];
+            };
+        };
+        responses: {
+            /** @description Retention settings saved. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionSettings"];
+                };
+            };
+            /** @description Invalid retention settings. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listIndexRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1728,6 +1915,40 @@ export interface operations {
             };
         };
     };
+    listCleanupExecutions: {
+        parameters: {
+            query?: {
+                nexus_instance_id?: components["parameters"]["NexusInstanceID"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent cleanup executions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        executions: components["schemas"]["CleanupExecution"][];
+                    };
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     requestCleanupExecution: {
         parameters: {
             query?: never;
@@ -1770,6 +1991,90 @@ export interface operations {
             };
             /** @description Admin role required. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    cancelCleanupExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cleanup_execution_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleanup execution canceled or cancellation requested. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanupExecution"];
+                };
+            };
+            /** @description Cleanup execution cannot be canceled. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listCleanupExecutionEvents: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                cleanup_execution_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleanup execution event log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        events: components["schemas"]["CleanupExecutionEvent"][];
+                    };
+                };
+            };
+            /** @description Authentication required or invalid credentials. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1927,7 +2232,9 @@ export interface operations {
     };
     listTagPatterns: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;

@@ -32,3 +32,18 @@ make typecheck
 
 The target depends on `web-deps`, which runs `npm ci` from `web/package-lock.json`
 when `web/node_modules` is missing or stale.
+
+## Helm
+
+Use `make helm-check` before changing the chart:
+
+```sh
+make helm-check
+```
+
+The target runs `helm lint`, renders the default chart, and runs Go-based chart
+tests that assert rendered Deployments, Service selectors, Secret references,
+optional metrics resources, and schema rejection for invalid values.
+
+See [Helm Chart Improvement Plan](helm-chart-improvement-plan.md) for the
+planned chart hardening and common configuration features.

@@ -18,6 +18,7 @@ const (
 	TaskTypeNoop                = "noop"
 	TaskTypeRepositoryDiscovery = "repository_discovery"
 	TaskTypeDockerTagScan       = "docker_tag_scan"
+	TaskTypePackageAssetScan    = "package_asset_scan"
 	TaskTypeManifestFetchBatch  = "manifest_fetch_batch"
 	TaskTypeVerificationChecks  = "verification_checks"
 	TaskTypeTrendSnapshot       = "trend_snapshot"
@@ -57,6 +58,24 @@ type RateLimitSettings struct {
 	AssetListRPS        *float64
 	RegistryManifestRPS *float64
 	DefaultRPS          *float64
+}
+
+type RetentionSettings struct {
+	IntervalSeconds         int
+	ScanRunDays             int
+	CleanupExecutionDays    int
+	VerificationFindingDays int
+	TrendSnapshotDays       int
+	UpdatedBy               string
+	UpdatedAt               *time.Time
+	Configured              bool
+}
+
+type RetentionResult struct {
+	DeletedScanRuns             int64
+	DeletedCleanupExecutions    int64
+	DeletedVerificationFindings int64
+	DeletedTrendSnapshots       int64
 }
 
 type AnalyticsListRequest struct {
@@ -135,6 +154,7 @@ type CleanupSimulationTag struct {
 	RepositoryName            string
 	ImageName                 string
 	Tag                       string
+	Digest                    string
 	PatternName               string
 	RuleName                  string
 	Reason                    string
@@ -163,6 +183,16 @@ type CleanupExecutionRequest struct {
 	MaintenanceWindowStart string
 	MaintenanceWindowEnd   string
 	Limit                  int32
+}
+
+type CleanupExecutionProcessRequest struct {
+	NexusUsername          string
+	NexusPassword          string
+	DeleteRPS              float64
+	MaintenanceWindowStart string
+	MaintenanceWindowEnd   string
+	LeaseSeconds           int32
+	WorkerID               string
 }
 
 type PolicyValidationError struct {

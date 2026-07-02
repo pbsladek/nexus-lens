@@ -6,27 +6,74 @@
     "image": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["repository", "tag"],
+      "required": ["tag", "pullPolicy"],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 }
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
       }
     },
     "api": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas", "port"],
+      "required": ["replicas", "port", "image"],
       "properties": {
         "replicas": { "type": "integer", "minimum": 1 },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["", "Always", "IfNotPresent", "Never"]
+            }
+          }
+        }
       }
     },
     "worker": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replicas"],
+      "required": ["replicas", "image", "retention"],
       "properties": {
-        "replicas": { "type": "integer", "minimum": 1 }
+        "replicas": { "type": "integer", "minimum": 1 },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["", "Always", "IfNotPresent", "Never"]
+            }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "intervalSeconds",
+            "scanRunDays",
+            "cleanupExecutionDays",
+            "verificationFindingDays",
+            "trendSnapshotDays"
+          ],
+          "properties": {
+            "intervalSeconds": { "type": "integer", "minimum": 0 },
+            "scanRunDays": { "type": "integer", "minimum": 1 },
+            "cleanupExecutionDays": { "type": "integer", "minimum": 1 },
+            "verificationFindingDays": { "type": "integer", "minimum": 1 },
+            "trendSnapshotDays": { "type": "integer", "minimum": 1 }
+          }
+        }
       }
     },
     "nexus": {
@@ -153,7 +200,9 @@
             "labels",
             "queueAgeSeconds",
             "failedRuns24h",
-            "highVerificationFindings"
+            "highVerificationFindings",
+            "cleanupRunningAgeSeconds",
+            "cleanupFailedExecutions"
           ],
           "properties": {
             "enabled": { "type": "boolean" },
@@ -163,7 +212,9 @@
             },
             "queueAgeSeconds": { "type": "integer", "minimum": 1 },
             "failedRuns24h": { "type": "integer", "minimum": 1 },
-            "highVerificationFindings": { "type": "integer", "minimum": 1 }
+            "highVerificationFindings": { "type": "integer", "minimum": 1 },
+            "cleanupRunningAgeSeconds": { "type": "integer", "minimum": 1 },
+            "cleanupFailedExecutions": { "type": "integer", "minimum": 1 }
           }
         }
       }

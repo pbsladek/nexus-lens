@@ -13,7 +13,20 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === "/api/v1/me") {
-      await route.fulfill({ json: { username: "admin", role: "admin" } });
+      await route.fulfill({
+        json: {
+          username: "admin",
+          role: "admin",
+          capabilities: [
+            "read",
+            "manage_index",
+            "manage_settings",
+            "manage_tag_patterns",
+            "manage_findings",
+            "execute_cleanup",
+          ],
+        },
+      });
       return;
     }
     if (path === "/api/v1/index/runs" && request.method() === "GET") {
@@ -391,6 +404,32 @@ test.beforeEach(async ({ page }) => {
       });
       return;
     }
+    if (path === "/api/v1/admin/retention-settings" && request.method() === "GET") {
+      await route.fulfill({
+        json: {
+          interval_seconds: 3600,
+          scan_run_days: 30,
+          cleanup_execution_days: 365,
+          verification_finding_days: 180,
+          trend_snapshot_days: 365,
+          configured: true,
+          updated_by: "admin",
+          updated_at: now,
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/admin/retention-settings" && request.method() === "PUT") {
+      await route.fulfill({
+        json: {
+          ...request.postDataJSON(),
+          configured: true,
+          updated_by: "admin",
+          updated_at: now,
+        },
+      });
+      return;
+    }
     if (path === "/api/v1/index/runs" && request.method() === "POST") {
       await route.fulfill({
         status: 202,
@@ -402,6 +441,28 @@ test.beforeEach(async ({ page }) => {
           completed_tasks: 0,
           failed_tasks: 0,
           started_at: now,
+        },
+      });
+      return;
+    }
+    if (path.endsWith("/pause")) {
+      await route.fulfill({
+        json: {
+          nexus_instance_id: 7,
+          paused: true,
+          paused_reason: "manual pause",
+          paused_by: "admin",
+          circuit_failure_count: 0,
+        },
+      });
+      return;
+    }
+    if (path.endsWith("/resume")) {
+      await route.fulfill({
+        json: {
+          nexus_instance_id: 7,
+          paused: false,
+          circuit_failure_count: 0,
         },
       });
       return;
@@ -590,6 +651,47 @@ test.beforeEach(async ({ page }) => {
       });
       return;
     }
+    if (path === "/api/v1/cleanup/executions" && request.method() === "GET") {
+      await route.fulfill({
+        json: {
+          executions: [
+            {
+              id: 9,
+              nexus_instance_id: 7,
+              policy_name: "ci-feature-cleanup",
+              status: "blocked_read_only",
+              requested_by: "admin",
+              approved_by: "admin",
+              destructive_enabled: false,
+              simulation_summary: { candidate_tag_count: 1 },
+              audit_log: [{ event: "approval_recorded" }],
+              created_at: now,
+              approved_at: now,
+              finished_at: now,
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/cleanup/executions/9/events" && request.method() === "GET") {
+      await route.fulfill({
+        json: {
+          events: [
+            {
+              id: 91,
+              cleanup_execution_id: 9,
+              event_type: "blocked_read_only",
+              status: "blocked",
+              actor: "admin",
+              message: "destructive cleanup execution blocked because read-only mode is enabled",
+              created_at: now,
+            },
+          ],
+        },
+      });
+      return;
+    }
 
     await route.fulfill({ status: 404, json: { code: "not_found" } });
   });
@@ -698,6 +800,143 @@ test("saves a tag pattern and starts reclassification", async ({ page }) => {
   await expect(page.getByText("started tag_reclassification run 88")).toBeVisible();
 });
 
+test("saves retention settings as an admin", async ({ page }) => {
+  await page.goto("/");
+  const settings = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Settings" }),
+  });
+  await expect(settings.getByText("Database override by admin")).toBeVisible();
+
+  await settings.getByRole("spinbutton", { name: "Retention interval seconds", exact: true }).fill("7200");
+  await settings.getByLabel("Scan run days").fill("45");
+  await settings.getByLabel("Cleanup execution days").fill("400");
+  await settings.getByLabel("Closed finding days").fill("120");
+  await settings.getByLabel("Trend snapshot days").fill("730");
+
+  const saveRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/admin/retention-settings" && request.method() === "PUT";
+  });
+  await settings.getByRole("button", { name: "Save retention" }).click();
+  const request = await saveRequest;
+  const body = request.postDataJSON() as {
+    interval_seconds: number;
+    scan_run_days: number;
+    cleanup_execution_days: number;
+    verification_finding_days: number;
+    trend_snapshot_days: number;
+  };
+  expect(body).toMatchObject({
+    interval_seconds: 7200,
+    scan_run_days: 45,
+    cleanup_execution_days: 400,
+    verification_finding_days: 120,
+    trend_snapshot_days: 730,
+  });
+
+  await expect(page.getByText("saved retention settings")).toBeVisible();
+  await expect(settings.getByText("Database override by admin")).toBeVisible();
+});
+
+test("operates indexing controls, queue retry, findings dismissal, schedules, and rate limits", async ({ page }) => {
+  await page.goto("/");
+
+  const pauseRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/index/nexus/7/pause" && request.method() === "POST";
+  });
+  await page.getByRole("button", { name: "Pause" }).click();
+  await pauseRequest;
+  await expect(page.getByText("paused Nexus 7")).toBeVisible();
+
+  const resumeRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/index/nexus/7/resume" && request.method() === "POST";
+  });
+  await page.getByRole("button", { name: "Resume" }).click();
+  await resumeRequest;
+  await expect(page.getByText("resumed Nexus 7")).toBeVisible();
+
+  const retryRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/index/tasks/99/retry" && request.method() === "POST";
+  });
+  await page.getByRole("button", { name: "Retry" }).click();
+  await retryRequest;
+  await expect(page.getByText("queued retry for task 99")).toBeVisible();
+
+  const dismissRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/index/verification/findings/17/dismiss" && request.method() === "POST";
+  });
+  await page.getByRole("button", { name: "Dismiss" }).click();
+  await dismissRequest;
+  await expect(page.getByText("dismissed finding 17")).toBeVisible();
+
+  const settings = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Settings" }),
+  });
+  await settings.getByLabel("Schedule name").fill("bounded-weekly");
+  await settings.getByLabel("Schedule type").selectOption("bounded_reindex");
+  await settings.getByRole("spinbutton", { name: "Interval seconds", exact: true }).fill("604800");
+  await settings.getByLabel("Run when due").check();
+  const scheduleRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    if (url.pathname !== "/api/v1/admin/indexing-schedules" || request.method() !== "POST") {
+      return false;
+    }
+    const body = request.postDataJSON() as { name: string; scan_type: string; interval_seconds: number; due_now: boolean };
+    return body.name === "bounded-weekly" && body.scan_type === "bounded_reindex" && body.interval_seconds === 604800 && body.due_now;
+  });
+  await settings.getByRole("button", { name: "Save schedule" }).click();
+  await scheduleRequest;
+  await expect(page.getByText("saved schedule bounded-weekly")).toBeVisible();
+
+  await settings.getByLabel("Asset list RPS").fill("4");
+  await settings.getByLabel("Manifest RPS").fill("2");
+  await settings.getByLabel("Default RPS").fill("8");
+  const rateLimitRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    if (url.pathname !== "/api/v1/admin/nexus/7/rate-limits" || request.method() !== "PUT") {
+      return false;
+    }
+    const body = request.postDataJSON() as {
+      asset_list_rps?: number;
+      registry_manifest_rps?: number;
+      default_rps?: number;
+    };
+    return body.asset_list_rps === 4 && body.registry_manifest_rps === 2 && body.default_rps === 8;
+  });
+  await settings.getByRole("button", { name: "Save rate limits" }).click();
+  await rateLimitRequest;
+  await expect(page.getByText("saved rate limits for Nexus 7")).toBeVisible();
+});
+
+test("disables permission-sensitive controls for read-only users", async ({ page }) => {
+  await page.route("http://127.0.0.1:5601/api/v1/me", async (route) => {
+    await route.fulfill({
+      json: {
+        username: "reader",
+        role: "read_only",
+        capabilities: ["read"],
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Run type").selectOption("full_reconcile");
+  await expect(page.getByRole("button", { name: "Start" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save pattern" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Reclassify" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save retention" })).toBeDisabled();
+
+  const cleanup = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Cleanup simulation" }),
+  });
+  await cleanup.getByRole("button", { name: "Simulate" }).click();
+  await expect(cleanup.getByRole("button", { name: "Request execution" })).toBeDisabled();
+});
+
 test("validates and runs cleanup simulation", async ({ page }) => {
   await page.goto("/");
   const section = page.locator("section").filter({
@@ -728,4 +967,80 @@ test("validates and runs cleanup simulation", async ({ page }) => {
   await section.getByRole("button", { name: "Request execution" }).click();
   await executionRequest;
   await expect(section.getByText("Execution 9: blocked_read_only")).toBeVisible();
+});
+
+test("cancels a running cleanup execution", async ({ page }) => {
+  await page.route(/\/api\/v1\/cleanup\/executions(\?.*)?$/, async (route) => {
+    await route.fulfill({
+      json: {
+        executions: [
+          {
+            id: 10,
+            nexus_instance_id: 7,
+            policy_name: "ci-feature-cleanup",
+            status: "running",
+            requested_by: "admin",
+            approved_by: "admin",
+            destructive_enabled: true,
+            approved_candidate_count: 1,
+            simulation_summary: { candidate_tag_count: 1 },
+            audit_log: [{ event: "cleanup_started" }],
+            created_at: now,
+            approved_at: now,
+            started_at: now,
+            locked_by: "worker-1",
+          },
+        ],
+      },
+    });
+  });
+  await page.route(/\/api\/v1\/cleanup\/executions\/10\/events(\?.*)?$/, async (route) => {
+    await route.fulfill({
+      json: {
+        events: [
+          {
+            id: 101,
+            cleanup_execution_id: 10,
+            event_type: "cleanup_started",
+            status: "running",
+            actor: "worker-1",
+            message: "cleanup execution started",
+            created_at: now,
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/v1/cleanup/executions/10/cancel", async (route) => {
+    await route.fulfill({
+      json: {
+        id: 10,
+        nexus_instance_id: 7,
+        policy_name: "ci-feature-cleanup",
+        status: "cancel_requested",
+        requested_by: "admin",
+        destructive_enabled: true,
+        approved_candidate_count: 1,
+        simulation_summary: { candidate_tag_count: 1 },
+        audit_log: [{ event: "cancel_requested" }],
+        created_at: now,
+        cancel_requested_at: now,
+      },
+    });
+  });
+
+  await page.goto("/");
+  const cleanup = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Cleanup simulation" }),
+  });
+  await cleanup.getByRole("button", { name: "Refresh executions" }).click();
+  await expect(cleanup.getByRole("row", { name: /10 running/ })).toBeVisible();
+
+  const cancelRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v1/cleanup/executions/10/cancel" && request.method() === "POST";
+  });
+  await cleanup.getByRole("row", { name: /10 running/ }).getByRole("button", { name: "Cancel" }).click();
+  await cancelRequest;
+  await expect(cleanup.getByText("Execution 10: cancel_requested")).toBeVisible();
 });

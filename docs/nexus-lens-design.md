@@ -31,7 +31,7 @@ The initial goal is not to replace Nexus cleanup policies or mutate Nexus. The f
 
 ### Non-goals for v1
 
-- No deletion of artifacts.
+- No deletion of artifacts by default. Controlled cleanup execution is optional, disabled by default, and requires explicit operator approval plus guardrails.
 - No direct blob-store mutation.
 - No blob-store filesystem or object-store scanning in v1.
 - No proxy or group repository indexing in v1.
@@ -39,14 +39,14 @@ The initial goal is not to replace Nexus cleanup policies or mutate Nexus. The f
 - No dependency on direct Nexus database access.
 - No packaged PostgreSQL or database operator.
 - No OIDC in the first auth implementation.
-- No cleanup policy simulation in the first implementation phase.
-- No automatic cleanup execution.
+- No automatic cleanup execution. Nexus Lens can queue approved cleanup execution requests, but it must not infer or run destructive cleanup without an explicit admin request.
+- No custom role editor in v1. The app starts with `admin` and `read_only`, while API responses expose named capabilities so roles can split later without changing endpoint contracts.
 
 ## Design principles
 
 1. **Nexus remains source of truth.** Nexus APIs and registry APIs are authoritative for logical artifacts.
 2. **The index is disposable.** PostgreSQL can be rebuilt from Nexus APIs and registry APIs.
-3. **Read-only by default.** All v1 interactions are non-mutating.
+3. **Read-only by default.** Indexing, analytics, verification, and simulation are non-mutating. Destructive cleanup is an opt-in execution mode with separate controls.
 4. **Do not make Nexus the query engine.** Expensive analysis runs against the local index.
 5. **Calculate real reclaimable bytes.** Logical image size is not enough because Docker layers are shared.
 6. **Design for GitOps/platform workflows.** Reports, policy definitions, and cleanup plans should be exportable.
@@ -63,9 +63,10 @@ The first implementation should bias toward fewer moving parts that are easy to 
 - Polling/reconcile is the baseline. Webhooks are a later acceleration path, not required for v1 correctness.
 - Defer webhook receiver/storage/API until polling, reconcile, and scheduled syncs are proven. Do not ship webhook state tables in the v1 schema.
 - Full reconcile, bounded reindex, and recent sync are enough. Rebuild local index is a manual maintenance feature for later unless corruption recovery proves it is needed early.
-- Docker/OCI is the only fully modeled artifact type in v1. PyPI, npm, and Go module repositories can be discovered and shown as unsupported/discover-only.
+- Docker/OCI is the only fully modeled artifact graph in v1. Hosted PyPI, npm, and Go module repositories can be asset-indexed through the generic artifact table without format-specific dependency or cleanup semantics.
 - Do not model Nexus components deeply for Docker. Use Assets API for inventory and Registry API for tag/digest/layer truth; store component data only as optional raw diagnostic metadata if observed.
 - Keep deletion safety with completed reconcile scopes, but avoid complex generation/swap table designs.
+- Keep cleanup execution asynchronous. Store the approved dry-run candidate set, process it from the worker, lock the Nexus instance while it runs, allow cancellation, and write normalized execution events.
 - Store current Docker state in hot tables and append lightweight observations for history. Do not build a full event-sourcing system in v1.
 - Keep one current-state `nexus_assets` table. Do not add asset-history tables in v1.
 - Defer generic source observation/event tables until a concrete debugging gap appears.
@@ -1882,24 +1883,22 @@ Retention is configurable and deletion-only in v1. Nexus Lens should not downsam
 Default retention:
 
 ```yaml
-retention:
-  scanRuns: 90d
-  succeededTasks: 14d
-  failedTasks: 90d
-  taskAttempts: 14d
-  failedTaskAttempts: 90d
-  openVerificationFindings: forever
-  resolvedVerificationFindings: 180d
-  trendSnapshots: 365d
+worker:
+  retention:
+    intervalSeconds: 3600
+    scanRunDays: 30
+    cleanupExecutionDays: 365
+    verificationFindingDays: 180
+    trendSnapshotDays: 365
 ```
 
 Rules:
 
-- Delete old retention-managed rows in small batches.
-- Keep open verification findings regardless of age.
-- Keep unresolved failed tasks regardless of age until resolved, retried, or explicitly cleared.
-- Keep aggregate run summaries in `scan_runs.stats` so deleting detailed task rows does not erase high-level history.
-- Expose retention settings in the admin UI.
+- Delete terminal scan runs older than the configured scan-run retention.
+- Delete terminal cleanup executions older than the configured cleanup-execution retention. Event rows cascade with their execution.
+- Keep open verification findings regardless of age; delete only closed findings after their retention window.
+- Keep trend snapshots as daily rows and delete rows older than the configured snapshot retention.
+- Expose retention defaults in Helm and allow Admin settings UI overrides stored in PostgreSQL.
 - Add downsampling later only if daily snapshot volume or chart performance makes it necessary.
 
 ## Analytics
@@ -2059,15 +2058,15 @@ Cleanup-policy assist:
 
 ### Future package formats
 
-The core v1 domain is Docker/OCI. PyPI, npm, and Go module repositories should remain possible through a generic artifact layer, but they should not weaken the container-specific graph model.
+The core v1 domain is Docker/OCI. PyPI, npm, and Go module repositories use a generic artifact layer first, but they should not weaken the container-specific graph model.
 
 Extension approach:
 
 - Keep container tables optimized for image/tag/manifest/layer analysis.
-- Add generic `artifacts`, `artifact_versions`, and `artifact_assets` tables when adding non-container formats.
+- Use `generic_artifacts` for initial non-container asset indexing from the Nexus Assets API.
 - Use `repositories.format` to route indexers and UI views.
 - Reuse Nexus REST asset ingestion across formats where useful, but add format-specific models only when a second format is implemented.
-- Add format-specific indexers for PyPI packages, npm packages, and Go modules later.
+- Add deeper format-specific indexers for PyPI packages, npm packages, and Go modules later.
 - Keep cleanup simulation policy format-aware; do not force layer-sharing concepts onto package types where they do not apply.
 
 Future format examples:
@@ -2501,15 +2500,13 @@ indexing:
     baseDelay: 5s
     maxDelay: 5m
 
-retention:
-  scanRuns: 90d
-  succeededTasks: 14d
-  failedTasks: 90d
-  taskAttempts: 14d
-  failedTaskAttempts: 90d
-  openVerificationFindings: forever
-  resolvedVerificationFindings: 180d
-  trendSnapshots: 365d
+worker:
+  retention:
+    intervalSeconds: 3600
+    scanRunDays: 30
+    cleanupExecutionDays: 365
+    verificationFindingDays: 180
+    trendSnapshotDays: 365
 
 ```
 
@@ -2549,7 +2546,7 @@ Compose is useful for local iteration but should not define the production archi
 - Use least-privilege Nexus user where possible.
 - Do not log credentials.
 - Redact URLs containing credentials.
-- Support separate read-only and future executor credentials only when cleanup execution is added later.
+- Support separate read-only and executor credentials later if operators need stricter separation. The first implementation uses the same Nexus basic credential for REST, registry, and optional cleanup execution.
 
 Nexus authentication:
 
@@ -2574,6 +2571,7 @@ User authentication:
 
 - Start with built-in basic login/session auth.
 - Store app users, password hashes, roles, disabled state, and login timestamps in PostgreSQL.
+- Store app role capability lists in PostgreSQL so deployments can add narrower roles without code changes. Seed `admin` and `read_only` roles by migration.
 - Bootstrap the first admin user from a Kubernetes Secret on first install.
 - Initial roles are `admin` and `read-only`.
 - Admins can configure Nexus instances, schedules, credentials references, rate limits, and indexing actions.
@@ -2588,6 +2586,7 @@ Roles:
 
 - Read-only: read dashboards, repository data, trends, index status, and verification findings.
 - Admin: configure instances, schedules, credentials references, rate limits, and indexing actions.
+- Custom roles: map a role name to explicit capabilities such as `manage_index`, `manage_settings`, `manage_tag_patterns`, `manage_findings`, and `execute_cleanup`.
 
 ## Observability
 

@@ -62,6 +62,11 @@ func (s *Service) EnqueueRepositoryDiscoveryRun(ctx context.Context, req Enqueue
 	} else if conflict != nil {
 		return db.ScanRun{}, conflict
 	}
+	if conflict, err := s.cleanupLockConflict(ctx, nexus.ID); err != nil {
+		return db.ScanRun{}, err
+	} else if conflict != nil {
+		return db.ScanRun{}, conflict
+	}
 
 	run, err := s.queries.CreateScanRun(ctx, db.CreateScanRunParams{
 		NexusInstanceID:     nexus.ID,
@@ -177,20 +182,23 @@ func (s *Service) UpsertSchedule(ctx context.Context, req ScheduleRequest) (db.I
 	return schedule, nil
 }
 
-func (s *Service) ListNexusInstances(ctx context.Context) ([]db.ListNexusInstancesRow, error) {
-	instances, err := s.queries.ListNexusInstances(ctx)
+func (s *Service) ListNexusInstances(ctx context.Context, limit int32) ([]db.ListNexusInstancesRow, error) {
+	instances, err := s.queries.ListNexusInstances(ctx, boundedLimit(limit, 100))
 	if err != nil {
 		return nil, fmt.Errorf("list nexus instances: %w", err)
 	}
 	return instances, nil
 }
 
-func (s *Service) ListSchedules(ctx context.Context, nexusInstanceID int64) ([]db.ListIndexingSchedulesRow, error) {
+func (s *Service) ListSchedules(ctx context.Context, nexusInstanceID int64, limit int32) ([]db.ListIndexingSchedulesRow, error) {
 	var filter pgtype.Int8
 	if nexusInstanceID > 0 {
 		filter = int8(nexusInstanceID, true)
 	}
-	schedules, err := s.queries.ListIndexingSchedules(ctx, filter)
+	schedules, err := s.queries.ListIndexingSchedules(ctx, db.ListIndexingSchedulesParams{
+		NexusInstanceID: filter,
+		LimitCount:      boundedLimit(limit, 200),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list indexing schedules: %w", err)
 	}
@@ -208,6 +216,81 @@ func (s *Service) UpdateRateLimits(ctx context.Context, nexusInstanceID int64, s
 		return db.NexusIndexingControl{}, fmt.Errorf("upsert nexus rate limits: %w", err)
 	}
 	return control, nil
+}
+
+func (s *Service) GetRetentionSettings(ctx context.Context, defaults RetentionSettings) (RetentionSettings, error) {
+	settings := normalizeRetentionSettings(defaults)
+	row, err := s.queries.GetRetentionSettings(ctx)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return settings, nil
+		}
+		return RetentionSettings{}, fmt.Errorf("get retention settings: %w", err)
+	}
+	return mergeRetentionSettings(settings, row), nil
+}
+
+func (s *Service) UpsertRetentionSettings(ctx context.Context, settings RetentionSettings) (RetentionSettings, error) {
+	settings = normalizeRetentionSettings(settings)
+	row, err := s.queries.UpsertRetentionSettings(ctx, db.UpsertRetentionSettingsParams{
+		IntervalSeconds:         optionalInt4(int32(settings.IntervalSeconds)),
+		ScanRunDays:             optionalInt4(int32(settings.ScanRunDays)),
+		CleanupExecutionDays:    optionalInt4(int32(settings.CleanupExecutionDays)),
+		VerificationFindingDays: optionalInt4(int32(settings.VerificationFindingDays)),
+		TrendSnapshotDays:       optionalInt4(int32(settings.TrendSnapshotDays)),
+		UpdatedBy:               text(settings.UpdatedBy),
+	})
+	if err != nil {
+		return RetentionSettings{}, fmt.Errorf("upsert retention settings: %w", err)
+	}
+	return mergeRetentionSettings(RetentionSettings{}, row), nil
+}
+
+func normalizeRetentionSettings(settings RetentionSettings) RetentionSettings {
+	if settings.IntervalSeconds < 60 {
+		settings.IntervalSeconds = 3600
+	}
+	if settings.ScanRunDays <= 0 {
+		settings.ScanRunDays = 30
+	}
+	if settings.CleanupExecutionDays <= 0 {
+		settings.CleanupExecutionDays = 365
+	}
+	if settings.VerificationFindingDays <= 0 {
+		settings.VerificationFindingDays = 180
+	}
+	if settings.TrendSnapshotDays <= 0 {
+		settings.TrendSnapshotDays = 365
+	}
+	return settings
+}
+
+func mergeRetentionSettings(defaults RetentionSettings, row db.AppRetentionSetting) RetentionSettings {
+	settings := normalizeRetentionSettings(defaults)
+	if row.IntervalSeconds.Valid {
+		settings.IntervalSeconds = int(row.IntervalSeconds.Int32)
+	}
+	if row.ScanRunDays.Valid {
+		settings.ScanRunDays = int(row.ScanRunDays.Int32)
+	}
+	if row.CleanupExecutionDays.Valid {
+		settings.CleanupExecutionDays = int(row.CleanupExecutionDays.Int32)
+	}
+	if row.VerificationFindingDays.Valid {
+		settings.VerificationFindingDays = int(row.VerificationFindingDays.Int32)
+	}
+	if row.TrendSnapshotDays.Valid {
+		settings.TrendSnapshotDays = int(row.TrendSnapshotDays.Int32)
+	}
+	if row.UpdatedBy.Valid {
+		settings.UpdatedBy = row.UpdatedBy.String
+	}
+	if row.UpdatedAt.Valid {
+		updatedAt := row.UpdatedAt.Time
+		settings.UpdatedAt = &updatedAt
+	}
+	settings.Configured = true
+	return normalizeRetentionSettings(settings)
 }
 
 func (s *Service) GetAnalyticsOverview(ctx context.Context, nexusInstanceID int64) (db.GetAnalyticsOverviewRow, error) {
@@ -344,6 +427,13 @@ func analyticsLimit(limit int32) int32 {
 	return limit
 }
 
+func boundedLimit(limit, defaultLimit int32) int32 {
+	if limit <= 0 || limit > defaultLimit {
+		return defaultLimit
+	}
+	return limit
+}
+
 func trendDateOrDefault(value string, fallback time.Time) (time.Time, error) {
 	if value == "" {
 		return fallback, nil
@@ -351,8 +441,8 @@ func trendDateOrDefault(value string, fallback time.Time) (time.Time, error) {
 	return time.Parse("2006-01-02", value)
 }
 
-func (s *Service) ListTagPatterns(ctx context.Context) ([]db.TagPattern, error) {
-	patterns, err := s.queries.ListTagPatterns(ctx)
+func (s *Service) ListTagPatterns(ctx context.Context, limit int32) ([]db.TagPattern, error) {
+	patterns, err := s.queries.ListTagPatterns(ctx, boundedLimit(limit, 500))
 	if err != nil {
 		return nil, fmt.Errorf("list tag patterns: %w", err)
 	}
@@ -573,6 +663,22 @@ func (s *Service) operationLockConflict(ctx context.Context, nexusInstanceID int
 	}, nil
 }
 
+func (s *Service) cleanupLockConflict(ctx context.Context, nexusInstanceID int64) (*OperationLockConflict, error) {
+	lock, err := s.queries.GetCleanupLock(ctx, nexusInstanceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get cleanup lock: %w", err)
+	}
+	return &OperationLockConflict{
+		NexusInstanceID:   lock.NexusInstanceID,
+		BlockingScanRunID: lock.CleanupExecutionID,
+		BlockingScanType:  "cleanup_execution",
+		BlockingStatus:    "running",
+	}, nil
+}
+
 func scanTypeRequiresOperationLock(scanType string) bool {
 	return scanType == ScanTypeFullReconcile || scanType == ScanTypeBoundedReindex
 }
@@ -656,6 +762,32 @@ func (s *Service) DismissVerificationFinding(ctx context.Context, findingID int6
 	return finding, nil
 }
 
+func (s *Service) ApplyRetention(ctx context.Context, settings RetentionSettings, now time.Time) (RetentionResult, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	settings = normalizeRetentionSettings(settings)
+	var result RetentionResult
+	var err error
+	result.DeletedScanRuns, err = s.queries.DeleteTerminalScanRunsBefore(ctx, timestamptz(now.AddDate(0, 0, -settings.ScanRunDays)))
+	if err != nil {
+		return result, fmt.Errorf("delete old scan runs: %w", err)
+	}
+	result.DeletedCleanupExecutions, err = s.queries.DeleteCleanupExecutionsBefore(ctx, timestamptz(now.AddDate(0, 0, -settings.CleanupExecutionDays)))
+	if err != nil {
+		return result, fmt.Errorf("delete old cleanup executions: %w", err)
+	}
+	result.DeletedVerificationFindings, err = s.queries.DeleteClosedVerificationFindingsBefore(ctx, timestamptz(now.AddDate(0, 0, -settings.VerificationFindingDays)))
+	if err != nil {
+		return result, fmt.Errorf("delete old verification findings: %w", err)
+	}
+	result.DeletedTrendSnapshots, err = s.queries.DeleteTrendSnapshotsBefore(ctx, pgDate(now.AddDate(0, 0, -settings.TrendSnapshotDays)))
+	if err != nil {
+		return result, fmt.Errorf("delete old trend snapshots: %w", err)
+	}
+	return result, nil
+}
+
 func (s *Service) PrometheusMetrics(ctx context.Context) (string, error) {
 	taskCounts, err := s.queries.CountScanTasksByStatus(ctx)
 	if err != nil {
@@ -672,6 +804,18 @@ func (s *Service) PrometheusMetrics(ctx context.Context) (string, error) {
 	oldestPendingAge, err := s.queries.GetOldestPendingTaskAgeSeconds(ctx)
 	if err != nil {
 		return "", fmt.Errorf("get oldest pending task age: %w", err)
+	}
+	cleanupCounts, err := s.queries.CountCleanupExecutionsByStatus(ctx)
+	if err != nil {
+		return "", fmt.Errorf("count cleanup executions by status: %w", err)
+	}
+	cleanupEventCounts, err := s.queries.CountCleanupExecutionEvents24h(ctx)
+	if err != nil {
+		return "", fmt.Errorf("count cleanup execution events: %w", err)
+	}
+	oldestCleanupAge, err := s.queries.GetOldestRunningCleanupAgeSeconds(ctx)
+	if err != nil {
+		return "", fmt.Errorf("get oldest running cleanup age: %w", err)
 	}
 
 	var out strings.Builder
@@ -696,6 +840,19 @@ func (s *Service) PrometheusMetrics(ctx context.Context) (string, error) {
 	out.WriteString("# HELP nexus_lens_queue_oldest_pending_age_seconds Age in seconds of the oldest pending or retryable task.\n")
 	out.WriteString("# TYPE nexus_lens_queue_oldest_pending_age_seconds gauge\n")
 	fmt.Fprintf(&out, "nexus_lens_queue_oldest_pending_age_seconds %d\n", oldestPendingAge)
+	out.WriteString("# HELP nexus_lens_cleanup_executions Current cleanup execution count by status.\n")
+	out.WriteString("# TYPE nexus_lens_cleanup_executions gauge\n")
+	for _, row := range cleanupCounts {
+		fmt.Fprintf(&out, "nexus_lens_cleanup_executions{status=%q} %d\n", row.Status, row.Count)
+	}
+	out.WriteString("# HELP nexus_lens_cleanup_execution_events_24h Cleanup execution event count by type and status in the last 24 hours.\n")
+	out.WriteString("# TYPE nexus_lens_cleanup_execution_events_24h gauge\n")
+	for _, row := range cleanupEventCounts {
+		fmt.Fprintf(&out, "nexus_lens_cleanup_execution_events_24h{event_type=%q,status=%q} %d\n", row.EventType, textValue(row.Status), row.Count)
+	}
+	out.WriteString("# HELP nexus_lens_cleanup_oldest_running_age_seconds Age in seconds of the oldest running cleanup execution.\n")
+	out.WriteString("# TYPE nexus_lens_cleanup_oldest_running_age_seconds gauge\n")
+	fmt.Fprintf(&out, "nexus_lens_cleanup_oldest_running_age_seconds %d\n", oldestCleanupAge)
 	return out.String(), nil
 }
 

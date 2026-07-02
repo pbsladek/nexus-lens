@@ -26,9 +26,19 @@ type Server struct {
 type Option func(*Server)
 
 type AuthenticatedUser struct {
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	Username     string   `json:"username"`
+	Role         string   `json:"role"`
+	Capabilities []string `json:"capabilities"`
 }
+
+const (
+	CapabilityRead              = "read"
+	CapabilityManageIndex       = "manage_index"
+	CapabilityManageSettings    = "manage_settings"
+	CapabilityManageTagPatterns = "manage_tag_patterns"
+	CapabilityManageFindings    = "manage_findings"
+	CapabilityExecuteCleanup    = "execute_cleanup"
+)
 
 type AuthenticateFunc func(ctx context.Context, username, password string) (AuthenticatedUser, error)
 
@@ -53,10 +63,12 @@ type IndexingService interface {
 	ListVerificationFindings(ctx context.Context, nexusInstanceID int64, status string, limit int32) ([]VerificationFinding, error)
 	DismissVerificationFinding(ctx context.Context, findingID int64, dismissedBy string) (VerificationFinding, error)
 	PrometheusMetrics(ctx context.Context) (string, error)
-	ListNexusInstances(ctx context.Context) ([]NexusInstance, error)
-	ListIndexingSchedules(ctx context.Context, nexusInstanceID int64) ([]IndexingSchedule, error)
+	ListNexusInstances(ctx context.Context, limit int32) ([]NexusInstance, error)
+	ListIndexingSchedules(ctx context.Context, nexusInstanceID int64, limit int32) ([]IndexingSchedule, error)
 	UpsertIndexingSchedule(ctx context.Context, req UpsertIndexingScheduleRequest) (IndexingSchedule, error)
 	UpdateNexusRateLimits(ctx context.Context, nexusInstanceID int64, req RateLimitSettings) (IndexingControl, error)
+	GetRetentionSettings(ctx context.Context) (RetentionSettings, error)
+	UpdateRetentionSettings(ctx context.Context, req RetentionSettings) (RetentionSettings, error)
 	GetAnalyticsOverview(ctx context.Context, nexusInstanceID int64) (AnalyticsOverview, error)
 	ListRepositoryAnalytics(ctx context.Context, req AnalyticsListRequest) ([]RepositoryAnalytics, error)
 	ListImageAnalytics(ctx context.Context, req AnalyticsListRequest) ([]ImageAnalytics, error)
@@ -65,8 +77,11 @@ type IndexingService interface {
 	ListTrendSeries(ctx context.Context, req TrendSeriesRequest) ([]TrendPoint, error)
 	ListTrendTopMovers(ctx context.Context, req TrendTopMoversRequest) ([]TrendTopMover, error)
 	SimulateCleanupPolicy(ctx context.Context, req CleanupSimulationRequest) (CleanupSimulationResult, error)
+	ListCleanupExecutions(ctx context.Context, nexusInstanceID int64, limit int32) ([]CleanupExecution, error)
 	RequestCleanupExecution(ctx context.Context, req CleanupExecutionRequest) (CleanupExecution, error)
-	ListTagPatterns(ctx context.Context) ([]TagPattern, error)
+	CancelCleanupExecution(ctx context.Context, cleanupExecutionID int64, canceledBy string) (CleanupExecution, error)
+	ListCleanupExecutionEvents(ctx context.Context, cleanupExecutionID int64, limit int32) ([]CleanupExecutionEvent, error)
+	ListTagPatterns(ctx context.Context, limit int32) ([]TagPattern, error)
 	UpsertTagPattern(ctx context.Context, req UpsertTagPatternRequest) (TagPattern, error)
 	StartTagReclassification(ctx context.Context, req TagReclassificationRequest) (IndexRun, error)
 	ListTagPatternAnalytics(ctx context.Context, req TagPatternListRequest) ([]TagPatternAnalytics, error)
@@ -188,6 +203,17 @@ type RateLimitSettings struct {
 	DefaultRPS          *float64 `json:"default_rps,omitempty"`
 }
 
+type RetentionSettings struct {
+	IntervalSeconds         int32      `json:"interval_seconds"`
+	ScanRunDays             int32      `json:"scan_run_days"`
+	CleanupExecutionDays    int32      `json:"cleanup_execution_days"`
+	VerificationFindingDays int32      `json:"verification_finding_days"`
+	TrendSnapshotDays       int32      `json:"trend_snapshot_days"`
+	UpdatedBy               string     `json:"updated_by,omitempty"`
+	UpdatedAt               *time.Time `json:"updated_at,omitempty"`
+	Configured              bool       `json:"configured"`
+}
+
 type AnalyticsListRequest struct {
 	NexusInstanceID int64
 	RepositoryName  string
@@ -275,6 +301,7 @@ type CleanupSimulationTag struct {
 	RepositoryName            string     `json:"repository_name"`
 	ImageName                 string     `json:"image_name"`
 	Tag                       string     `json:"tag"`
+	Digest                    string     `json:"digest"`
 	PatternName               string     `json:"pattern_name"`
 	RuleName                  string     `json:"rule_name,omitempty"`
 	Reason                    string     `json:"reason,omitempty"`
@@ -311,9 +338,36 @@ type CleanupExecution struct {
 	SimulationSummary           any        `json:"simulation_summary"`
 	AuditLog                    any        `json:"audit_log"`
 	PostDeleteVerificationRunID *int64     `json:"post_delete_verification_run_id,omitempty"`
+	PostDeleteReconcileRunID    *int64     `json:"post_delete_reconcile_run_id,omitempty"`
 	CreatedAt                   time.Time  `json:"created_at"`
 	ApprovedAt                  *time.Time `json:"approved_at,omitempty"`
+	StartedAt                   *time.Time `json:"started_at,omitempty"`
 	FinishedAt                  *time.Time `json:"finished_at,omitempty"`
+	CancelRequestedAt           *time.Time `json:"cancel_requested_at,omitempty"`
+	CanceledBy                  string     `json:"canceled_by,omitempty"`
+	LockedBy                    string     `json:"locked_by,omitempty"`
+	LeaseExpiresAt              *time.Time `json:"lease_expires_at,omitempty"`
+	ApprovedCandidateCount      int64      `json:"approved_candidate_count"`
+}
+
+type CleanupExecutionEvent struct {
+	ID                 int64     `json:"id"`
+	CleanupExecutionID int64     `json:"cleanup_execution_id"`
+	EventType          string    `json:"event_type"`
+	Actor              string    `json:"actor,omitempty"`
+	RepositoryName     string    `json:"repository_name,omitempty"`
+	ImageName          string    `json:"image_name,omitempty"`
+	Tag                string    `json:"tag,omitempty"`
+	TagID              int64     `json:"tag_id,omitempty"`
+	RuleName           string    `json:"rule_name,omitempty"`
+	ComponentID        string    `json:"component_id,omitempty"`
+	Status             string    `json:"status,omitempty"`
+	Message            string    `json:"message,omitempty"`
+	ErrorClass         string    `json:"error_class,omitempty"`
+	ErrorCode          string    `json:"error_code,omitempty"`
+	ErrorMessage       string    `json:"error_message,omitempty"`
+	Details            any       `json:"details,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type RepositoryAnalytics struct {
@@ -582,6 +636,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/admin/indexing-schedules", s.listIndexingSchedules)
 	s.mux.HandleFunc("POST /api/v1/admin/indexing-schedules", s.upsertIndexingSchedule)
 	s.mux.HandleFunc("PUT /api/v1/admin/nexus/{nexus_instance_id}/rate-limits", s.updateNexusRateLimits)
+	s.mux.HandleFunc("GET /api/v1/admin/retention-settings", s.getRetentionSettings)
+	s.mux.HandleFunc("PUT /api/v1/admin/retention-settings", s.updateRetentionSettings)
 	s.mux.HandleFunc("GET /api/v1/analytics/overview", s.getAnalyticsOverview)
 	s.mux.HandleFunc("GET /api/v1/analytics/repositories", s.listRepositoryAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics/images", s.listImageAnalytics)
@@ -590,7 +646,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/analytics/trends", s.listTrendSeries)
 	s.mux.HandleFunc("GET /api/v1/analytics/trends/top-movers", s.listTrendTopMovers)
 	s.mux.HandleFunc("POST /api/v1/cleanup/simulations", s.simulateCleanupPolicy)
+	s.mux.HandleFunc("GET /api/v1/cleanup/executions", s.listCleanupExecutions)
 	s.mux.HandleFunc("POST /api/v1/cleanup/executions", s.requestCleanupExecution)
+	s.mux.HandleFunc("POST /api/v1/cleanup/executions/{cleanup_execution_id}/cancel", s.cancelCleanupExecution)
+	s.mux.HandleFunc("GET /api/v1/cleanup/executions/{cleanup_execution_id}/events", s.listCleanupExecutionEvents)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns", s.listTagPatternAnalytics)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns/growth", s.listTagPatternGrowth)
 	s.mux.HandleFunc("GET /api/v1/analytics/tag-patterns/examples", s.listTagPatternExamples)
@@ -627,6 +686,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user.Capabilities = capabilitiesForUser(user)
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -636,9 +696,10 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Username  string    `json:"username"`
-	Role      string    `json:"role"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Username     string    `json:"username"`
+	Role         string    `json:"role"`
+	Capabilities []string  `json:"capabilities"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -661,9 +722,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 	http.SetCookie(w, s.sessionCookie(session.Token, session.ExpiresAt))
 	writeJSON(w, http.StatusOK, loginResponse{
-		Username:  session.User.Username,
-		Role:      session.User.Role,
-		ExpiresAt: session.ExpiresAt,
+		Username:     session.User.Username,
+		Role:         session.User.Role,
+		Capabilities: capabilitiesForUser(session.User),
+		ExpiresAt:    session.ExpiresAt,
 	})
 }
 
@@ -678,7 +740,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageSettings) {
 		return
 	}
 
@@ -694,7 +756,7 @@ func (s *Server) listIndexRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runs, err := s.indexing.ListIndexRuns(r.Context(), 50)
+	runs, err := s.indexing.ListIndexRuns(r.Context(), int32(queryInt64(r, "limit")))
 	if err != nil {
 		s.logger.Error("list index runs failed", "request_id", requestIDFromContext(r.Context()), "error", err)
 		writeProblem(w, http.StatusInternalServerError, "index_runs_list_failed", "index runs could not be loaded", requestIDFromContext(r.Context()), true)
@@ -723,7 +785,7 @@ func (s *Server) listIndexTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startIndexRun(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageIndex) {
 		return
 	}
 	if s.indexing == nil {
@@ -752,7 +814,7 @@ func (s *Server) startIndexRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelIndexRun(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageIndex) {
 		return
 	}
 	if s.indexing == nil {
@@ -773,7 +835,7 @@ func (s *Server) cancelIndexRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) retryIndexTask(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageIndex) {
 		return
 	}
 	if s.indexing == nil {
@@ -814,7 +876,7 @@ func (s *Server) listVerificationFindings(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) dismissVerificationFinding(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdminUser(w, r)
+	user, ok := s.requireCapabilityUser(w, r, CapabilityManageFindings)
 	if !ok {
 		return
 	}
@@ -843,7 +905,7 @@ func (s *Server) listNexusInstances(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
 		return
 	}
-	instances, err := s.indexing.ListNexusInstances(r.Context())
+	instances, err := s.indexing.ListNexusInstances(r.Context(), int32(queryInt64(r, "limit")))
 	if err != nil {
 		s.logger.Error("list nexus instances failed", "request_id", requestIDFromContext(r.Context()), "error", err)
 		writeProblem(w, http.StatusInternalServerError, "nexus_instances_list_failed", "Nexus instances could not be loaded", requestIDFromContext(r.Context()), true)
@@ -860,7 +922,7 @@ func (s *Server) listIndexingSchedules(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
 		return
 	}
-	schedules, err := s.indexing.ListIndexingSchedules(r.Context(), queryInt64(r, "nexus_instance_id"))
+	schedules, err := s.indexing.ListIndexingSchedules(r.Context(), queryInt64(r, "nexus_instance_id"), int32(queryInt64(r, "limit")))
 	if err != nil {
 		s.logger.Error("list indexing schedules failed", "request_id", requestIDFromContext(r.Context()), "error", err)
 		writeProblem(w, http.StatusInternalServerError, "indexing_schedules_list_failed", "indexing schedules could not be loaded", requestIDFromContext(r.Context()), true)
@@ -870,7 +932,7 @@ func (s *Server) listIndexingSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) upsertIndexingSchedule(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageSettings) {
 		return
 	}
 	if s.indexing == nil {
@@ -896,7 +958,7 @@ func (s *Server) upsertIndexingSchedule(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) updateNexusRateLimits(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageSettings) {
 		return
 	}
 	if s.indexing == nil {
@@ -919,6 +981,55 @@ func (s *Server) updateNexusRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, control)
+}
+
+func (s *Server) getRetentionSettings(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuthenticated(w, r); !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	settings, err := s.indexing.GetRetentionSettings(r.Context())
+	if err != nil {
+		s.logger.Error("get retention settings failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "retention_settings_get_failed", "retention settings could not be loaded", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) updateRetentionSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireCapabilityUser(w, r, CapabilityManageSettings)
+	if !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	var req RetentionSettings
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_request", "invalid JSON request body", requestIDFromContext(r.Context()), false)
+		return
+	}
+	if req.IntervalSeconds < 60 {
+		writeProblem(w, http.StatusBadRequest, "invalid_retention_settings", "interval_seconds must be at least 60", requestIDFromContext(r.Context()), false)
+		return
+	}
+	if req.ScanRunDays <= 0 || req.CleanupExecutionDays <= 0 || req.VerificationFindingDays <= 0 || req.TrendSnapshotDays <= 0 {
+		writeProblem(w, http.StatusBadRequest, "invalid_retention_settings", "retention day values must be greater than zero", requestIDFromContext(r.Context()), false)
+		return
+	}
+	req.UpdatedBy = user.Username
+	settings, err := s.indexing.UpdateRetentionSettings(r.Context(), req)
+	if err != nil {
+		s.logger.Error("update retention settings failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "retention_settings_update_failed", "retention settings could not be saved", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 func (s *Server) getAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
@@ -1047,7 +1158,7 @@ func (s *Server) simulateCleanupPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requestCleanupExecution(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdminUser(w, r)
+	user, ok := s.requireCapabilityUser(w, r, CapabilityExecuteCleanup)
 	if !ok {
 		return
 	}
@@ -1073,6 +1184,71 @@ func (s *Server) requestCleanupExecution(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, execution)
+}
+
+func (s *Server) listCleanupExecutions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuthenticated(w, r); !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	executions, err := s.indexing.ListCleanupExecutions(r.Context(), queryInt64(r, "nexus_instance_id"), int32(queryInt64(r, "limit")))
+	if err != nil {
+		s.logger.Error("list cleanup executions failed", "request_id", requestIDFromContext(r.Context()), "error", err)
+		writeProblem(w, http.StatusInternalServerError, "cleanup_execution_list_failed", "cleanup executions could not be loaded", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"executions": executions})
+}
+
+func (s *Server) cancelCleanupExecution(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireCapabilityUser(w, r, CapabilityExecuteCleanup)
+	if !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	cleanupExecutionID, ok := pathInt64(w, r, "cleanup_execution_id")
+	if !ok {
+		return
+	}
+	execution, err := s.indexing.CancelCleanupExecution(r.Context(), cleanupExecutionID, user.Username)
+	if err != nil {
+		var invalid invalidRequestError
+		if errors.As(err, &invalid) && invalid.InvalidRequest() {
+			writeProblem(w, http.StatusBadRequest, "cleanup_execution_cancel_invalid", err.Error(), requestIDFromContext(r.Context()), false)
+			return
+		}
+		s.logger.Error("cancel cleanup execution failed", "request_id", requestIDFromContext(r.Context()), "cleanup_execution_id", cleanupExecutionID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "cleanup_execution_cancel_failed", "cleanup execution could not be canceled", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, execution)
+}
+
+func (s *Server) listCleanupExecutionEvents(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuthenticated(w, r); !ok {
+		return
+	}
+	if s.indexing == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
+		return
+	}
+	cleanupExecutionID, ok := pathInt64(w, r, "cleanup_execution_id")
+	if !ok {
+		return
+	}
+	events, err := s.indexing.ListCleanupExecutionEvents(r.Context(), cleanupExecutionID, int32(queryInt64(r, "limit")))
+	if err != nil {
+		s.logger.Error("list cleanup execution events failed", "request_id", requestIDFromContext(r.Context()), "cleanup_execution_id", cleanupExecutionID, "error", err)
+		writeProblem(w, http.StatusInternalServerError, "cleanup_execution_events_failed", "cleanup execution events could not be loaded", requestIDFromContext(r.Context()), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Server) listTagPatternAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -1137,7 +1313,7 @@ func (s *Server) listTagPatterns(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "indexing_not_configured", "indexing is not configured", requestIDFromContext(r.Context()), true)
 		return
 	}
-	patterns, err := s.indexing.ListTagPatterns(r.Context())
+	patterns, err := s.indexing.ListTagPatterns(r.Context(), int32(queryInt64(r, "limit")))
 	if err != nil {
 		s.logger.Error("list tag patterns failed", "request_id", requestIDFromContext(r.Context()), "error", err)
 		writeProblem(w, http.StatusInternalServerError, "tag_patterns_list_failed", "tag patterns could not be loaded", requestIDFromContext(r.Context()), true)
@@ -1147,7 +1323,7 @@ func (s *Server) listTagPatterns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) upsertTagPattern(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageTagPatterns) {
 		return
 	}
 	if s.indexing == nil {
@@ -1173,7 +1349,7 @@ func (s *Server) upsertTagPattern(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startTagReclassification(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageTagPatterns) {
 		return
 	}
 	if s.indexing == nil {
@@ -1224,7 +1400,7 @@ func (s *Server) listAnalytics(w http.ResponseWriter, r *http.Request, load func
 }
 
 func (s *Server) pauseNexusIndexing(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAdminUser(w, r)
+	user, ok := s.requireCapabilityUser(w, r, CapabilityManageIndex)
 	if !ok {
 		return
 	}
@@ -1253,7 +1429,7 @@ func (s *Server) pauseNexusIndexing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resumeNexusIndexing(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
+	if !s.requireCapability(w, r, CapabilityManageIndex) {
 		return
 	}
 	if s.indexing == nil {
@@ -1320,27 +1496,58 @@ func (s *Server) requireAuthenticated(w http.ResponseWriter, r *http.Request) (A
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	user, ok := s.requireAuthenticated(w, r)
-	if !ok {
-		return false
-	}
-	if user.Role != "admin" {
-		writeProblem(w, http.StatusForbidden, "forbidden", "admin role required", requestIDFromContext(r.Context()), false)
-		return false
-	}
-	return true
+	return s.requireCapability(w, r, CapabilityManageIndex)
 }
 
 func (s *Server) requireAdminUser(w http.ResponseWriter, r *http.Request) (AuthenticatedUser, bool) {
+	return s.requireCapabilityUser(w, r, CapabilityManageIndex)
+}
+
+func (s *Server) requireCapability(w http.ResponseWriter, r *http.Request, capability string) bool {
+	_, ok := s.requireCapabilityUser(w, r, capability)
+	return ok
+}
+
+func (s *Server) requireCapabilityUser(w http.ResponseWriter, r *http.Request, capability string) (AuthenticatedUser, bool) {
 	user, ok := s.requireAuthenticated(w, r)
 	if !ok {
 		return AuthenticatedUser{}, false
 	}
-	if user.Role != "admin" {
-		writeProblem(w, http.StatusForbidden, "forbidden", "admin role required", requestIDFromContext(r.Context()), false)
+	if !userHasCapability(user, capability) {
+		writeProblem(w, http.StatusForbidden, "forbidden", "required capability: "+capability, requestIDFromContext(r.Context()), false)
 		return AuthenticatedUser{}, false
 	}
 	return user, true
+}
+
+func userHasCapability(user AuthenticatedUser, capability string) bool {
+	for _, item := range capabilitiesForUser(user) {
+		if item == capability {
+			return true
+		}
+	}
+	return false
+}
+
+func capabilitiesForUser(user AuthenticatedUser) []string {
+	if len(user.Capabilities) > 0 {
+		return user.Capabilities
+	}
+	return CapabilitiesForRole(user.Role)
+}
+
+func CapabilitiesForRole(role string) []string {
+	if role == "admin" {
+		return []string{
+			CapabilityRead,
+			CapabilityManageIndex,
+			CapabilityManageSettings,
+			CapabilityManageTagPatterns,
+			CapabilityManageFindings,
+			CapabilityExecuteCleanup,
+		}
+	}
+	return []string{CapabilityRead}
 }
 
 func pathInt64(w http.ResponseWriter, r *http.Request, key string) (int64, bool) {

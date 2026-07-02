@@ -67,6 +67,13 @@ func main() {
 				cleanupDeleteRPS:           envFloat("NEXUS_LENS_CLEANUP_DELETE_RPS", 0.5),
 				cleanupMaintenanceStartUTC: os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_START_UTC"),
 				cleanupMaintenanceEndUTC:   os.Getenv("NEXUS_LENS_CLEANUP_MAINTENANCE_END_UTC"),
+				retentionDefaults: indexing.RetentionSettings{
+					IntervalSeconds:         envInt("NEXUS_LENS_RETENTION_INTERVAL_SECONDS", 3600),
+					ScanRunDays:             envInt("NEXUS_LENS_RETENTION_SCAN_RUN_DAYS", 30),
+					CleanupExecutionDays:    envInt("NEXUS_LENS_RETENTION_CLEANUP_EXECUTION_DAYS", 365),
+					VerificationFindingDays: envInt("NEXUS_LENS_RETENTION_VERIFICATION_FINDING_DAYS", 180),
+					TrendSnapshotDays:       envInt("NEXUS_LENS_RETENTION_TREND_SNAPSHOT_DAYS", 365),
+				},
 			}),
 		)
 	} else {
@@ -107,6 +114,18 @@ func envFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		return fallback
 	}
@@ -165,7 +184,7 @@ func (a apiAuthAdapter) RevokeSession(ctx context.Context, token string) error {
 }
 
 func apiUser(user auth.User) api.AuthenticatedUser {
-	return api.AuthenticatedUser{Username: user.Username, Role: user.Role}
+	return api.AuthenticatedUser{Username: user.Username, Role: user.Role, Capabilities: user.Capabilities}
 }
 
 type apiIndexingAdapter struct {
@@ -176,6 +195,7 @@ type apiIndexingAdapter struct {
 	cleanupDeleteRPS           float64
 	cleanupMaintenanceStartUTC string
 	cleanupMaintenanceEndUTC   string
+	retentionDefaults          indexing.RetentionSettings
 }
 
 func (a apiIndexingAdapter) StartIndexRun(ctx context.Context, req api.StartIndexRunRequest) (api.IndexRun, error) {
@@ -259,8 +279,8 @@ func (a apiIndexingAdapter) PrometheusMetrics(ctx context.Context) (string, erro
 	return a.service.PrometheusMetrics(ctx)
 }
 
-func (a apiIndexingAdapter) ListNexusInstances(ctx context.Context) ([]api.NexusInstance, error) {
-	instances, err := a.service.ListNexusInstances(ctx)
+func (a apiIndexingAdapter) ListNexusInstances(ctx context.Context, limit int32) ([]api.NexusInstance, error) {
+	instances, err := a.service.ListNexusInstances(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -271,8 +291,8 @@ func (a apiIndexingAdapter) ListNexusInstances(ctx context.Context) ([]api.Nexus
 	return out, nil
 }
 
-func (a apiIndexingAdapter) ListIndexingSchedules(ctx context.Context, nexusInstanceID int64) ([]api.IndexingSchedule, error) {
-	schedules, err := a.service.ListSchedules(ctx, nexusInstanceID)
+func (a apiIndexingAdapter) ListIndexingSchedules(ctx context.Context, nexusInstanceID int64, limit int32) ([]api.IndexingSchedule, error) {
+	schedules, err := a.service.ListSchedules(ctx, nexusInstanceID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +320,7 @@ func (a apiIndexingAdapter) UpsertIndexingSchedule(ctx context.Context, req api.
 	if err != nil {
 		return api.IndexingSchedule{}, err
 	}
-	schedules, err := a.service.ListSchedules(ctx, schedule.NexusInstanceID)
+	schedules, err := a.service.ListSchedules(ctx, schedule.NexusInstanceID, 200)
 	if err != nil {
 		return api.IndexingSchedule{}, err
 	}
@@ -332,6 +352,29 @@ func (a apiIndexingAdapter) UpdateNexusRateLimits(ctx context.Context, nexusInst
 		return api.IndexingControl{}, err
 	}
 	return apiIndexingControl(control), nil
+}
+
+func (a apiIndexingAdapter) GetRetentionSettings(ctx context.Context) (api.RetentionSettings, error) {
+	settings, err := a.service.GetRetentionSettings(ctx, a.retentionDefaults)
+	if err != nil {
+		return api.RetentionSettings{}, err
+	}
+	return apiRetentionSettings(settings), nil
+}
+
+func (a apiIndexingAdapter) UpdateRetentionSettings(ctx context.Context, req api.RetentionSettings) (api.RetentionSettings, error) {
+	settings, err := a.service.UpsertRetentionSettings(ctx, indexing.RetentionSettings{
+		IntervalSeconds:         int(req.IntervalSeconds),
+		ScanRunDays:             int(req.ScanRunDays),
+		CleanupExecutionDays:    int(req.CleanupExecutionDays),
+		VerificationFindingDays: int(req.VerificationFindingDays),
+		TrendSnapshotDays:       int(req.TrendSnapshotDays),
+		UpdatedBy:               req.UpdatedBy,
+	})
+	if err != nil {
+		return api.RetentionSettings{}, err
+	}
+	return apiRetentionSettings(settings), nil
 }
 
 func (a apiIndexingAdapter) GetAnalyticsOverview(ctx context.Context, nexusInstanceID int64) (api.AnalyticsOverview, error) {
@@ -464,6 +507,18 @@ func (a apiIndexingAdapter) SimulateCleanupPolicy(ctx context.Context, req api.C
 	return apiCleanupSimulationResult(result), nil
 }
 
+func (a apiIndexingAdapter) ListCleanupExecutions(ctx context.Context, nexusInstanceID int64, limit int32) ([]api.CleanupExecution, error) {
+	rows, err := a.service.ListCleanupExecutions(ctx, nexusInstanceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.CleanupExecution, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, apiCleanupExecution(row))
+	}
+	return out, nil
+}
+
 func (a apiIndexingAdapter) RequestCleanupExecution(ctx context.Context, req api.CleanupExecutionRequest) (api.CleanupExecution, error) {
 	row, err := a.service.RequestCleanupExecution(ctx, indexing.CleanupExecutionRequest{
 		NexusInstanceID:        req.NexusInstanceID,
@@ -485,8 +540,28 @@ func (a apiIndexingAdapter) RequestCleanupExecution(ctx context.Context, req api
 	return apiCleanupExecution(row), nil
 }
 
-func (a apiIndexingAdapter) ListTagPatterns(ctx context.Context) ([]api.TagPattern, error) {
-	rows, err := a.service.ListTagPatterns(ctx)
+func (a apiIndexingAdapter) CancelCleanupExecution(ctx context.Context, cleanupExecutionID int64, canceledBy string) (api.CleanupExecution, error) {
+	row, err := a.service.CancelCleanupExecution(ctx, cleanupExecutionID, canceledBy)
+	if err != nil {
+		return api.CleanupExecution{}, err
+	}
+	return apiCleanupExecution(row), nil
+}
+
+func (a apiIndexingAdapter) ListCleanupExecutionEvents(ctx context.Context, cleanupExecutionID int64, limit int32) ([]api.CleanupExecutionEvent, error) {
+	rows, err := a.service.ListCleanupExecutionEvents(ctx, cleanupExecutionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.CleanupExecutionEvent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, apiCleanupExecutionEvent(row))
+	}
+	return out, nil
+}
+
+func (a apiIndexingAdapter) ListTagPatterns(ctx context.Context, limit int32) ([]api.TagPattern, error) {
+	rows, err := a.service.ListTagPatterns(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -888,6 +963,7 @@ func apiCleanupSimulationTag(tag indexing.CleanupSimulationTag) api.CleanupSimul
 		RepositoryName:            tag.RepositoryName,
 		ImageName:                 tag.ImageName,
 		Tag:                       tag.Tag,
+		Digest:                    tag.Digest,
 		PatternName:               tag.PatternName,
 		RuleName:                  tag.RuleName,
 		Reason:                    tag.Reason,
@@ -901,14 +977,15 @@ func apiCleanupSimulationTag(tag indexing.CleanupSimulationTag) api.CleanupSimul
 
 func apiCleanupExecution(row db.CleanupExecution) api.CleanupExecution {
 	out := api.CleanupExecution{
-		ID:                 row.ID,
-		NexusInstanceID:    row.NexusInstanceID,
-		PolicyName:         row.PolicyName,
-		Status:             row.Status,
-		RequestedBy:        row.RequestedBy,
-		DestructiveEnabled: row.DestructiveEnabled,
-		SimulationSummary:  jsonValue(row.SimulationSummary),
-		AuditLog:           jsonValue(row.AuditLog),
+		ID:                     row.ID,
+		NexusInstanceID:        row.NexusInstanceID,
+		PolicyName:             row.PolicyName,
+		Status:                 row.Status,
+		RequestedBy:            row.RequestedBy,
+		DestructiveEnabled:     row.DestructiveEnabled,
+		SimulationSummary:      jsonValue(row.SimulationSummary),
+		AuditLog:               jsonValue(row.AuditLog),
+		ApprovedCandidateCount: row.ApprovedCandidateCount,
 	}
 	if row.RepositoryName.Valid {
 		out.RepositoryName = row.RepositoryName.String
@@ -920,14 +997,82 @@ func apiCleanupExecution(row db.CleanupExecution) api.CleanupExecution {
 		id := row.PostDeleteVerificationRunID.Int64
 		out.PostDeleteVerificationRunID = &id
 	}
+	if row.PostDeleteReconcileRunID.Valid {
+		id := row.PostDeleteReconcileRunID.Int64
+		out.PostDeleteReconcileRunID = &id
+	}
 	if row.CreatedAt.Valid {
 		out.CreatedAt = row.CreatedAt.Time
 	}
 	if row.ApprovedAt.Valid {
 		out.ApprovedAt = &row.ApprovedAt.Time
 	}
+	if row.StartedAt.Valid {
+		out.StartedAt = &row.StartedAt.Time
+	}
 	if row.FinishedAt.Valid {
 		out.FinishedAt = &row.FinishedAt.Time
+	}
+	if row.CancelRequestedAt.Valid {
+		out.CancelRequestedAt = &row.CancelRequestedAt.Time
+	}
+	if row.CanceledBy.Valid {
+		out.CanceledBy = row.CanceledBy.String
+	}
+	if row.LockedBy.Valid {
+		out.LockedBy = row.LockedBy.String
+	}
+	if row.LeaseExpiresAt.Valid {
+		out.LeaseExpiresAt = &row.LeaseExpiresAt.Time
+	}
+	return out
+}
+
+func apiCleanupExecutionEvent(row db.CleanupExecutionEvent) api.CleanupExecutionEvent {
+	out := api.CleanupExecutionEvent{
+		ID:                 row.ID,
+		CleanupExecutionID: row.CleanupExecutionID,
+		EventType:          row.EventType,
+		Details:            jsonValue(row.Details),
+	}
+	if row.Actor.Valid {
+		out.Actor = row.Actor.String
+	}
+	if row.RepositoryName.Valid {
+		out.RepositoryName = row.RepositoryName.String
+	}
+	if row.ImageName.Valid {
+		out.ImageName = row.ImageName.String
+	}
+	if row.Tag.Valid {
+		out.Tag = row.Tag.String
+	}
+	if row.TagID.Valid {
+		out.TagID = row.TagID.Int64
+	}
+	if row.RuleName.Valid {
+		out.RuleName = row.RuleName.String
+	}
+	if row.ComponentID.Valid {
+		out.ComponentID = row.ComponentID.String
+	}
+	if row.Status.Valid {
+		out.Status = row.Status.String
+	}
+	if row.Message.Valid {
+		out.Message = row.Message.String
+	}
+	if row.ErrorClass.Valid {
+		out.ErrorClass = row.ErrorClass.String
+	}
+	if row.ErrorCode.Valid {
+		out.ErrorCode = row.ErrorCode.String
+	}
+	if row.ErrorMessage.Valid {
+		out.ErrorMessage = row.ErrorMessage.String
+	}
+	if row.CreatedAt.Valid {
+		out.CreatedAt = row.CreatedAt.Time
 	}
 	return out
 }
@@ -1060,6 +1205,19 @@ func apiIndexingControl(control db.NexusIndexingControl) api.IndexingControl {
 	out.RegistryManifestRPS = numericFloatPtr(control.RegistryManifestRps)
 	out.DefaultRPS = numericFloatPtr(control.DefaultRps)
 	return out
+}
+
+func apiRetentionSettings(settings indexing.RetentionSettings) api.RetentionSettings {
+	return api.RetentionSettings{
+		IntervalSeconds:         int32(settings.IntervalSeconds),
+		ScanRunDays:             int32(settings.ScanRunDays),
+		CleanupExecutionDays:    int32(settings.CleanupExecutionDays),
+		VerificationFindingDays: int32(settings.VerificationFindingDays),
+		TrendSnapshotDays:       int32(settings.TrendSnapshotDays),
+		UpdatedBy:               settings.UpdatedBy,
+		UpdatedAt:               settings.UpdatedAt,
+		Configured:              settings.Configured,
+	}
 }
 
 func numericFloat(value pgtype.Numeric) float64 {
