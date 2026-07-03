@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   cancelIndexRun,
   cancelCleanupExecution,
+  displayError,
   dismissVerificationFinding,
   getAnalyticsOverview,
   getAdminStatus,
@@ -68,10 +69,12 @@ import {
   type UpsertIndexingScheduleRequest,
   type VerificationFinding,
 } from "./api/client";
+import { PermissionHint } from "./components/PermissionHint";
+import { StatusPill, statusClass } from "./components/StatusPill";
+import { useTheme } from "./hooks/useTheme";
 import "./styles.css";
 
 type ScanType = StartIndexRunRequest["scan_type"];
-type Theme = "light" | "dark";
 
 const defaultCleanupPolicyYAML = `name: ci-feature-cleanup
 protected:
@@ -89,7 +92,7 @@ candidate_rules:
 `;
 
 function App() {
-  const [theme, setTheme] = useState<Theme>(() => preferredTheme());
+  const [theme, setTheme] = useTheme();
   const [apiStatus, setAPIStatus] = useState("checking");
   const [user, setUser] = useState<AppUser | null>(null);
   const [username, setUsername] = useState("admin");
@@ -143,6 +146,7 @@ function App() {
   const [analyticsSearch, setAnalyticsSearch] = useState("");
   const [analyticsOlderThanDays, setAnalyticsOlderThanDays] = useState(30);
   const [analyticsNeverDownloaded, setAnalyticsNeverDownloaded] = useState(false);
+  const [analyticsLimit, setAnalyticsLimit] = useState(100);
   const [patternStatus, setPatternStatus] = useState("not loaded");
   const [patterns, setPatterns] = useState<TagPattern[]>([]);
   const [patternRows, setPatternRows] = useState<TagPatternAnalytics[]>([]);
@@ -181,17 +185,17 @@ function App() {
   const canManageFindings = hasCapability(user, "manage_findings");
   const canExecuteCleanup = hasCapability(user, "execute_cleanup");
   const isExclusiveRun = scanType === "bounded_reindex" || scanType === "full_reconcile";
+  const selectedAnalyticsNexus = instances.find((instance) => instance.id === analyticsNexusID);
+  const selectedAnalyticsNexusLabel =
+    selectedAnalyticsNexus?.name ?? (analyticsNexusID > 0 ? String(analyticsNexusID) : "all");
+  const runningRunCount = runs.filter((run) => run.status === "running").length;
+  const failedTaskCount = tasks.filter((task) => task.status === "failed" || task.status === "retryable").length;
+  const openFindingCount = findings.length;
   const trendUsesPattern = trendMetricName.startsWith("tag_pattern_");
   const trendMaxValue = Math.max(
     1,
     ...trendPoints.map((point) => (point.missing ? 0 : point.metric_value ?? 0)),
   );
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-    window.localStorage.setItem("nexus-lens-theme", theme);
-  }, [theme]);
 
   useEffect(() => {
     let active = true;
@@ -366,7 +370,7 @@ function App() {
         olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
         growthWindowDays: patternGrowthWindowDays > 0 ? patternGrowthWindowDays : undefined,
         neverDownloaded: analyticsNeverDownloaded,
-        limit: 50,
+        limit: analyticsLimit,
       };
       const [definitionResponse, analyticsResponse, growthResponse, examplesResponse, suggestionsResponse] = await Promise.all([
         listTagPatterns(100),
@@ -400,7 +404,7 @@ function App() {
         search: analyticsSearch.trim() || undefined,
         olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
         neverDownloaded: analyticsNeverDownloaded,
-        limit: 50,
+        limit: analyticsLimit,
       };
       const [overviewResponse, repositoryResponse, imageResponse, tagResponse] = await Promise.all([
         getAnalyticsOverview(options.nexusInstanceID),
@@ -432,7 +436,7 @@ function App() {
       const response = await listPackageFormatRepositories({
         nexusInstanceID: analyticsNexusID > 0 ? analyticsNexusID : undefined,
         search: analyticsSearch.trim() || undefined,
-        limit: 100,
+        limit: analyticsLimit,
       });
       setPackageRows(response.repositories ?? []);
       setPackageStatus("loaded");
@@ -484,7 +488,7 @@ function App() {
         search: search || undefined,
         olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
         neverDownloaded: analyticsNeverDownloaded,
-        limit: 50,
+        limit: analyticsLimit,
       };
       const [overviewResponse, repositoryResponse, imageResponse, tagResponse] = await Promise.all([
         getAnalyticsOverview(options.nexusInstanceID),
@@ -524,7 +528,7 @@ function App() {
       setCleanupStatus("loaded");
     } catch (error) {
       setCleanupResult(null);
-      setCleanupStatus(error instanceof Error ? error.message : "simulation failed");
+      setCleanupStatus(displayError(error, "simulation failed"));
     }
   }
 
@@ -539,7 +543,7 @@ function App() {
         search: tag.tag,
         olderThanDays: analyticsOlderThanDays > 0 ? analyticsOlderThanDays : undefined,
         neverDownloaded: analyticsNeverDownloaded,
-        limit: 50,
+        limit: analyticsLimit,
       };
       const [overviewResponse, repositoryResponse, imageResponse, tagResponse] = await Promise.all([
         getAnalyticsOverview(options.nexusInstanceID),
@@ -588,7 +592,7 @@ function App() {
       await refreshCleanupExecutions(execution.id);
     } catch (error) {
       setCleanupExecution(null);
-      setCleanupStatus(error instanceof Error ? error.message : "execution request failed");
+      setCleanupStatus(displayError(error, "execution request failed"));
     }
   }
 
@@ -631,7 +635,7 @@ function App() {
       setCleanupStatus(`execution ${execution.status}`);
       await refreshCleanupExecutions(executionID);
     } catch (error) {
-      setCleanupStatus(error instanceof Error ? error.message : "cancel request failed");
+      setCleanupStatus(displayError(error, "cancel request failed"));
     }
   }
 
@@ -694,7 +698,7 @@ function App() {
       setConfirmationText("");
       await refreshRuns();
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "start failed");
+      setRunMessage(displayError(error, "start failed"));
     }
   }
 
@@ -717,7 +721,7 @@ function App() {
       setControl(next);
       setRunMessage(`paused Nexus ${next.nexus_instance_id}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "pause failed");
+      setRunMessage(displayError(error, "pause failed"));
     }
   }
 
@@ -728,7 +732,7 @@ function App() {
       setControl(next);
       setRunMessage(`resumed Nexus ${next.nexus_instance_id}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "resume failed");
+      setRunMessage(displayError(error, "resume failed"));
     }
   }
 
@@ -740,7 +744,7 @@ function App() {
       await refreshTasks(runID);
       setRunMessage(`canceled run ${runID}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "cancel failed");
+      setRunMessage(displayError(error, "cancel failed"));
     }
   }
 
@@ -751,7 +755,7 @@ function App() {
       await refreshTasks();
       setRunMessage(`queued retry for task ${taskID}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "retry failed");
+      setRunMessage(displayError(error, "retry failed"));
     }
   }
 
@@ -762,7 +766,7 @@ function App() {
       await refreshFindings();
       setRunMessage(`dismissed finding ${findingID}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "dismiss failed");
+      setRunMessage(displayError(error, "dismiss failed"));
     }
   }
 
@@ -792,7 +796,7 @@ function App() {
       setScheduleDueNow(false);
       setRunMessage(`saved schedule ${scheduleName}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "schedule save failed");
+      setRunMessage(displayError(error, "schedule save failed"));
     }
   }
 
@@ -809,7 +813,7 @@ function App() {
       setControl(next);
       setRunMessage(`saved rate limits for Nexus ${controlNexusID}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "rate limit save failed");
+      setRunMessage(displayError(error, "rate limit save failed"));
     }
   }
 
@@ -829,7 +833,7 @@ function App() {
       applyRetentionSettings(next);
       setRunMessage("saved retention settings");
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "retention settings save failed");
+      setRunMessage(displayError(error, "retention settings save failed"));
     }
   }
 
@@ -848,7 +852,7 @@ function App() {
       await refreshPatterns();
       setRunMessage(`saved tag pattern ${patternName}`);
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "tag pattern save failed");
+      setRunMessage(displayError(error, "tag pattern save failed"));
     }
   }
 
@@ -867,7 +871,7 @@ function App() {
       setTaskRunFilter(run.id);
       await refreshRuns();
     } catch (error) {
-      setRunMessage(error instanceof Error ? error.message : "tag reclassification failed");
+      setRunMessage(displayError(error, "tag reclassification failed"));
     }
   }
 
@@ -884,8 +888,8 @@ function App() {
         </div>
         <div className="header-actions" aria-label="Application status and display options">
           <div className="status-strip" aria-live="polite">
-            <span className={`status-pill ${statusClass(apiStatus)}`}>API: {apiStatus}</span>
-            <span className={`status-pill ${statusClass(authStatus)}`}>Session: {authStatus}</span>
+            <StatusPill label="API" status={apiStatus} />
+            <StatusPill label="Session" status={authStatus} />
           </div>
           <button
             type="button"
@@ -946,18 +950,28 @@ function App() {
             <p className={`panel-status ${statusClass(analyticsStatus)}`}>{analyticsStatus}</p>
           </div>
           <label>
-            Nexus ID
-            <input
-              min="0"
-              type="number"
+            Nexus
+            <select
               value={analyticsNexusID}
               onChange={(event) => setAnalyticsNexusID(Number(event.target.value))}
-            />
+            >
+              <option value={0}>All Nexus instances</option>
+              {instances.map((instance) => (
+                <option key={instance.id} value={instance.id}>
+                  {instance.name}
+                </option>
+              ))}
+            </select>
           </label>
           <button type="button" disabled={!user} onClick={refreshAnalytics}>
             Refresh
           </button>
         </div>
+        <p className="run-message">
+          {selectedAnalyticsNexus
+            ? `Filtering analytics to ${selectedAnalyticsNexus.name}.`
+            : "Showing analytics across all indexed Nexus instances."}
+        </p>
         <div className="metric-grid">
           <div className="metric">
             <span>Repositories</span>
@@ -988,6 +1002,11 @@ function App() {
           <span>Missing digests: {overview?.tags_missing_digest_count ?? 0}</span>
           <span>Missing manifests: {overview?.tags_missing_manifest_count ?? 0}</span>
           <span>Last successful run: {formatDate(overview?.last_successful_run_at)}</span>
+        </div>
+        <div className="warning-row">
+          <span>Running runs: {runningRunCount}</span>
+          <span>Failed or retryable tasks: {failedTaskCount}</span>
+          <span>Open verification findings: {openFindingCount}</span>
         </div>
       </section>
       <section className="panel stack" id="packages">
@@ -1191,6 +1210,17 @@ function App() {
               onChange={(event) => setAnalyticsOlderThanDays(Number(event.target.value))}
             />
           </label>
+          <label>
+            Query limit
+            <input
+              min="10"
+              max="200"
+              step="10"
+              type="number"
+              value={analyticsLimit}
+              onChange={(event) => setAnalyticsLimit(clampNumber(Number(event.target.value), 10, 200))}
+            />
+          </label>
           <button
             type="button"
             disabled={!user}
@@ -1207,10 +1237,16 @@ function App() {
           <label>
             Repository
             <input
+              list="repository-options"
               placeholder="docker-hosted-a"
               value={analyticsRepository}
               onChange={(event) => setAnalyticsRepository(event.target.value)}
             />
+            <datalist id="repository-options">
+              {repositoryRows.map((repository) => (
+                <option key={repository.repository_id} value={repository.repository_name} />
+              ))}
+            </datalist>
           </label>
           <label>
             Search image or tag
@@ -1528,6 +1564,7 @@ function App() {
           </table>
         </div>
         <form className="settings-form" onSubmit={handleSaveTagPattern}>
+          <PermissionHint allowed={canManageTagPatterns} capability="manage_tag_patterns" />
           <label>
             Pattern name
             <input value={patternName} onChange={(event) => setPatternName(event.target.value)} />
@@ -1585,6 +1622,7 @@ function App() {
             Reset policy
           </button>
         </div>
+        <PermissionHint allowed={canExecuteCleanup} capability="execute_cleanup" />
         <form className="simulation-form" onSubmit={handleSimulateCleanup}>
           <label>
             Policy YAML
@@ -1617,6 +1655,13 @@ function App() {
           </div>
         </div>
         <div className="execution-controls">
+          {cleanupResult ? (
+            <p className="confirmation">
+              Execution request will use policy {cleanupResult.policy_name}, Nexus{" "}
+              {selectedAnalyticsNexusLabel}, repository{" "}
+              {analyticsRepository.trim() || "all repositories"}, and {cleanupResult.candidate_tag_count} candidate tags.
+            </p>
+          ) : null}
           <label>
             Approval text
             <input
@@ -1844,6 +1889,7 @@ function App() {
       </section>
       {user ? (
         <section className="panel stack">
+          <PermissionHint allowed={canManageIndex} capability="manage_index" />
           <form className="run-form" onSubmit={handleStartRun}>
             <label>
               Nexus name
@@ -2006,6 +2052,7 @@ function App() {
             Refresh
           </button>
         </div>
+        <PermissionHint allowed={canManageSettings} capability="manage_settings" />
         <div className="table-wrap">
           <table>
             <thead>
@@ -2062,6 +2109,7 @@ function App() {
             Refresh
           </button>
         </div>
+        <PermissionHint allowed={canManageFindings} capability="manage_findings" />
         <div className="table-wrap">
           <table>
             <thead>
@@ -2355,52 +2403,19 @@ function App() {
   );
 }
 
-function preferredTheme(): Theme {
-  const stored = window.localStorage.getItem("nexus-lens-theme");
-  if (stored === "dark" || stored === "light") {
-    return stored;
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function statusClass(status: string): string {
-  const normalized = status.toLowerCase();
-  if (
-    normalized.includes("failed") ||
-    normalized.includes("unreachable") ||
-    normalized.includes("invalid") ||
-    normalized.includes("blocked")
-  ) {
-    return "status-bad";
-  }
-  if (
-    normalized.includes("loading") ||
-    normalized.includes("checking") ||
-    normalized.includes("starting") ||
-    normalized.includes("running") ||
-    normalized.includes("requesting") ||
-    normalized.includes("signing")
-  ) {
-    return "status-work";
-  }
-  if (
-    normalized.includes("ok") ||
-    normalized.includes("loaded") ||
-    normalized.includes("signed in") ||
-    normalized.includes("saved") ||
-    normalized.includes("active")
-  ) {
-    return "status-good";
-  }
-  return "status-neutral";
-}
-
 function nonNegativeNumberOrUndefined(value: string): number | undefined {
   if (value.trim() === "") {
     return undefined;
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
 }
 
 function dateInputValue(daysAgo: number): string {

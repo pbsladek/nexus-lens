@@ -545,6 +545,9 @@ func TestAPIIndexingAdapterDelegatesToService(t *testing.T) {
 			return &apiAdapterFakeRows{}, nil
 		case strings.Contains(query, "CountScanTasksByStatus"),
 			strings.Contains(query, "CountScanRunsByStatus24h"),
+			strings.Contains(query, "CountScanTasksByNexusStatus"),
+			strings.Contains(query, "ListOldestPendingTaskAgeByNexus"),
+			strings.Contains(query, "ListStaleIndexingSchedules"),
 			strings.Contains(query, "CountOpenVerificationFindingsBySeverity"),
 			strings.Contains(query, "CountCleanupExecutionsByStatus"),
 			strings.Contains(query, "CountCleanupExecutionEvents24h"):

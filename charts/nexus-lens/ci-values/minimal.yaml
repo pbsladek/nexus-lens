@@ -1,0 +1,21 @@
+serviceAccount:
+  create: false
+  name: default
+
+api:
+  replicas: 1
+
+worker:
+  replicas: 1
+
+metrics:
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+ingress:
+  enabled: false
+
+networkPolicy:
+  enabled: false

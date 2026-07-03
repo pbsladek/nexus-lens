@@ -2,6 +2,28 @@ image:
   tag: dev
   pullPolicy: IfNotPresent
 
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
 api:
   replicas: 1
   port: 5601
@@ -9,6 +31,13 @@ api:
     repository: ghcr.io/example/nexus-lens-api
     tag: ""
     pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
 
 worker:
   replicas: 1
@@ -16,6 +45,13 @@ worker:
     repository: ghcr.io/example/nexus-lens-worker
     tag: ""
     pullPolicy: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
   retention:
     intervalSeconds: 3600
     scanRunDays: 30
@@ -63,7 +99,26 @@ metrics:
     enabled: false
     labels: {}
     queueAgeSeconds: 1800
+    staleScheduleAgeSeconds: 3600
     failedRuns24h: 1
     highVerificationFindings: 1
     cleanupRunningAgeSeconds: 3600
     cleanupFailedExecutions: 1
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: nexus-lens.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+networkPolicy:
+  enabled: false
+  ingress:
+    enabled: true
+  egress:
+    enabled: true

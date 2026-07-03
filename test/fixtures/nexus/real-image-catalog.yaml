@@ -1,0 +1,204 @@
+# Real images seeded into the local Nexus fixture.
+# The source tag is always pushed. targetTags are additional Nexus tags for the same source image.
+# Prefer currently supported, pinned tags. Avoid entries that are already EOL or near
+# normal support EOL unless a test explicitly needs them.
+cache:
+  imageCount: 48
+  dockerReportedSizeBytes: 5207239997
+  capBytes: 5368709120
+  remainingBytes: 161469123
+  dockerReportedSize: "4.8 GiB"
+  generatedManifest: "deploy/compose/real-image-cache.manifest.md"
+images:
+  - source: "hello-world:latest"
+    targetPath: "library/hello-world"
+    targetTags: ["stable", "tiny"]
+    notes: "Small OCI fixture and smoke-test image."
+  - source: "busybox:1.37"
+    targetPath: "library/busybox"
+    targetTags: ["stable"]
+    notes: "Small real multi-tool base."
+  - source: "busybox:1.38"
+    targetPath: "library/busybox"
+    targetTags: ["latest"]
+    notes: "Small real multi-tool base."
+  - source: "alpine:3.23"
+    targetPath: "library/alpine"
+    targetTags: ["3.23", "stable"]
+    notes: "Small Alpine base."
+  - source: "alpine:3.24"
+    targetPath: "library/alpine"
+    targetTags: ["3.24", "latest"]
+    notes: "Small Alpine base."
+  - source: "debian:12.14-slim"
+    targetPath: "library/debian"
+    targetTags: ["bookworm-slim", "stable-slim", "latest-slim"]
+    notes: "Common slim Debian base."
+  - source: "debian:12.14"
+    targetPath: "library/debian"
+    targetTags: ["bookworm", "stable", "latest"]
+    notes: "Common Debian base."
+  - source: "ubuntu:24.04"
+    targetPath: "library/ubuntu"
+    targetTags: ["noble", "stable"]
+    notes: "Common Ubuntu LTS base."
+  - source: "ubuntu:26.04"
+    targetPath: "library/ubuntu"
+    targetTags: ["resolute", "latest"]
+    notes: "Common Ubuntu LTS base."
+  - source: "nginx:1.28.3-alpine"
+    targetPath: "library/nginx"
+    targetTags: ["1.28", "stable-alpine"]
+    notes: "Common small web runtime."
+  - source: "nginx:1.29.8-alpine"
+    targetPath: "library/nginx"
+    targetTags: ["1.29", "latest"]
+    notes: "Common small web runtime."
+  - source: "redis:8.8-alpine"
+    targetPath: "library/redis"
+    targetTags: ["8", "stable", "latest"]
+    notes: "Common small cache runtime."
+  - source: "postgres:17-alpine"
+    targetPath: "library/postgres"
+    targetTags: ["17"]
+    notes: "Common database runtime."
+  - source: "postgres:18-alpine"
+    targetPath: "library/postgres"
+    targetTags: ["18", "stable", "latest"]
+    notes: "Common database runtime."
+  - source: "mysql:8.4"
+    targetPath: "library/mysql"
+    targetTags: ["8", "stable", "latest"]
+    notes: "Common database runtime."
+  - source: "mariadb:11.4"
+    targetPath: "library/mariadb"
+    targetTags: ["11", "stable"]
+    notes: "Common database runtime."
+  - source: "mongo:8"
+    targetPath: "library/mongo"
+    targetTags: ["8", "stable", "latest"]
+    notes: "Common document database runtime."
+  - source: "node:24.18.0-alpine"
+    targetPath: "library/node"
+    targetTags: ["24", "24-stable", "lts-alpine"]
+    notes: "Common small JS runtime."
+  - source: "node:24.18.0-slim"
+    targetPath: "library/node"
+    targetTags: ["24-slim", "lts-slim"]
+    notes: "Common slim JS runtime."
+  - source: "node:26.4.0-alpine"
+    targetPath: "library/node"
+    targetTags: ["26", "26-stable", "latest"]
+    notes: "Common small JS runtime."
+  - source: "node:26.4.0-slim"
+    targetPath: "library/node"
+    targetTags: ["26-slim"]
+    notes: "Common slim JS runtime."
+  - source: "python:3.13.14-alpine"
+    targetPath: "library/python"
+    targetTags: ["3.13", "3.13-stable"]
+    notes: "Common small Python runtime."
+  - source: "python:3.13.14-slim"
+    targetPath: "library/python"
+    targetTags: ["3.13-slim"]
+    notes: "Common slim Python runtime."
+  - source: "python:3.14.6-alpine"
+    targetPath: "library/python"
+    targetTags: ["3.14", "3.14-stable", "latest"]
+    notes: "Common small Python runtime."
+  - source: "python:3.14.6-slim"
+    targetPath: "library/python"
+    targetTags: ["3.14-slim"]
+    notes: "Common slim Python runtime."
+  - source: "golang:1.25.11-alpine"
+    targetPath: "library/golang"
+    targetTags: ["1.25", "1.25-stable"]
+    notes: "Common small Go builder."
+  - source: "golang:1.26.4-alpine"
+    targetPath: "library/golang"
+    targetTags: ["1.26", "latest"]
+    notes: "Common small Go builder."
+  - source: "rust:1.82-slim"
+    targetPath: "library/rust"
+    targetTags: ["1.82"]
+    notes: "Common Rust builder."
+  - source: "rust:1.84-slim"
+    targetPath: "library/rust"
+    targetTags: ["1.84", "stable", "latest"]
+    notes: "Common Rust builder."
+  - source: "eclipse-temurin:17-jre"
+    targetPath: "library/eclipse-temurin"
+    targetTags: ["17-jre", "17", "stable"]
+    notes: "Common JVM runtime."
+  - source: "eclipse-temurin:21-jre"
+    targetPath: "library/eclipse-temurin"
+    targetTags: ["21-jre", "21", "latest"]
+    notes: "Common JVM runtime."
+  - source: "maven:3.9-eclipse-temurin-21"
+    targetPath: "library/maven"
+    targetTags: ["3.9", "latest"]
+    notes: "Common JVM build image."
+  - source: "gradle:8-jdk21"
+    targetPath: "library/gradle"
+    targetTags: ["8", "latest"]
+    notes: "Common JVM build image."
+  - source: "caddy:2-alpine"
+    targetPath: "library/caddy"
+    targetTags: ["2", "stable", "latest"]
+    notes: "Common small web server."
+  - source: "traefik:v3.1"
+    targetPath: "library/traefik"
+    targetTags: ["3", "stable", "latest"]
+    notes: "Common proxy runtime."
+  - source: "registry:2"
+    targetPath: "library/registry"
+    targetTags: ["2", "stable", "latest"]
+    notes: "Docker registry fixture."
+  - source: "sonatype/nexus3:3.88.0"
+    targetPath: "sonatype/nexus3"
+    targetTags: ["3.88", "latest"]
+    notes: "Nexus 3 fixture image."
+  - source: "jenkins/jenkins:lts-jdk21"
+    targetPath: "jenkins/jenkins"
+    targetTags: ["lts", "jdk21", "latest"]
+    notes: "Common CI controller image."
+  - source: "grafana/grafana:11.5.2"
+    targetPath: "grafana/grafana"
+    targetTags: ["11", "stable", "latest"]
+    notes: "Common observability UI."
+  - source: "prom/prometheus:v2.55.1"
+    targetPath: "prom/prometheus"
+    targetTags: ["2.55", "stable", "latest"]
+    notes: "Common metrics server."
+  - source: "docker:27-dind"
+    targetPath: "library/docker"
+    targetTags: ["27-dind", "dind"]
+    notes: "Common Docker-in-Docker CI image."
+  - source: "hashicorp/terraform:1.10"
+    targetPath: "hashicorp/terraform"
+    targetTags: ["1.10", "stable", "latest"]
+    notes: "Common infrastructure CLI image."
+  - source: "otel/opentelemetry-collector-contrib:0.116.1"
+    targetPath: "otel/opentelemetry-collector-contrib"
+    targetTags: ["0.116", "stable", "latest"]
+    notes: "Common telemetry collector image."
+  - source: "quay.io/keycloak/keycloak:26.0"
+    targetPath: "keycloak/keycloak"
+    targetTags: ["26", "stable", "latest"]
+    notes: "Common identity service image."
+  - source: "rabbitmq:3.13-management-alpine"
+    targetPath: "library/rabbitmq"
+    targetTags: ["3.13", "management", "stable", "latest"]
+    notes: "Common message broker image."
+  - source: "apache/kafka:3.8.1"
+    targetPath: "apache/kafka"
+    targetTags: ["3.8", "stable", "latest"]
+    notes: "Common event streaming image."
+  - source: "hashicorp/vault:1.18"
+    targetPath: "hashicorp/vault"
+    targetTags: ["1.18", "stable", "latest"]
+    notes: "Common secrets service image."
+  - source: "memcached:1.6-alpine"
+    targetPath: "library/memcached"
+    targetTags: ["1.6", "alpine", "latest"]
+    notes: "Common cache runtime image."

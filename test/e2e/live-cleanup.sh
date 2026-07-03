@@ -173,6 +173,29 @@ if [[ -z "${nexus_instance_id}" || "${nexus_instance_id}" == "null" ]]; then
   exit 1
 fi
 
+log "running bounded reindex for ${target_repository}"
+bounded_body="${work_dir}/bounded-reindex.json"
+jq -n \
+  --arg nexus_name "${nexus_name}" \
+  --arg base_url "${nexus_base_url}" \
+  --arg repository "${target_repository}" \
+  '{
+    nexus_name: $nexus_name,
+    base_url: $base_url,
+    scan_type: "bounded_reindex",
+    scope: {repositories: [$repository], window_days: 7}
+  }' > "${bounded_body}"
+bounded_reindex_id="$(api_json POST "/api/v1/index/runs" "${bounded_body}" | jq -r '.id')"
+wait_for_run "${bounded_reindex_id}" "bounded reindex"
+
+api_json GET "/api/v1/analytics/tag-patterns?nexus_instance_id=${nexus_instance_id}&repository_name=${target_repository}&limit=100" > "${work_dir}/tag-patterns.json"
+required_pattern_count="$(jq -r '[.patterns[] | select(.pattern_name == "semver" or .pattern_name == "pull_request" or .pattern_name == "feature_branch" or .pattern_name == "short_sha" or .pattern_name == "long_sha")] | length' "${work_dir}/tag-patterns.json")"
+if (( required_pattern_count < 3 )); then
+  echo "expected indexed tag-pattern analytics for seeded tags; got ${required_pattern_count}" >&2
+  jq . "${work_dir}/tag-patterns.json" >&2
+  exit 1
+fi
+
 policy_yaml="$(cat <<POLICY
 name: live-cleanup-e2e
 candidate_rules:

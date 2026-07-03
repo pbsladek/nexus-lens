@@ -143,6 +143,50 @@ func (q *Queries) CountScanRunsByStatus24h(ctx context.Context) ([]CountScanRuns
 	return items, nil
 }
 
+const countScanTasksByNexusStatus = `-- name: CountScanTasksByNexusStatus :many
+SELECT
+  t.nexus_instance_id,
+  ni.name AS nexus_name,
+  t.status,
+  count(*)::bigint AS count
+FROM scan_tasks t
+JOIN nexus_instances ni ON ni.id = t.nexus_instance_id
+GROUP BY t.nexus_instance_id, ni.name, t.status
+ORDER BY ni.name, t.status
+`
+
+type CountScanTasksByNexusStatusRow struct {
+	NexusInstanceID int64
+	NexusName       string
+	Status          string
+	Count           int64
+}
+
+func (q *Queries) CountScanTasksByNexusStatus(ctx context.Context) ([]CountScanTasksByNexusStatusRow, error) {
+	rows, err := q.db.Query(ctx, countScanTasksByNexusStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountScanTasksByNexusStatusRow
+	for rows.Next() {
+		var i CountScanTasksByNexusStatusRow
+		if err := rows.Scan(
+			&i.NexusInstanceID,
+			&i.NexusName,
+			&i.Status,
+			&i.Count,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countScanTasksByStatus = `-- name: CountScanTasksByStatus :many
 SELECT status, count(*)::bigint AS count
 FROM scan_tasks
@@ -200,4 +244,92 @@ func (q *Queries) GetOldestRunningCleanupAgeSeconds(ctx context.Context) (int64,
 	var age_seconds int64
 	err := row.Scan(&age_seconds)
 	return age_seconds, err
+}
+
+const listOldestPendingTaskAgeByNexus = `-- name: ListOldestPendingTaskAgeByNexus :many
+SELECT
+  t.nexus_instance_id,
+  ni.name AS nexus_name,
+  COALESCE(EXTRACT(EPOCH FROM now() - MIN(t.available_at)), 0)::bigint AS age_seconds
+FROM scan_tasks t
+JOIN nexus_instances ni ON ni.id = t.nexus_instance_id
+WHERE t.status IN ('pending', 'retryable')
+GROUP BY t.nexus_instance_id, ni.name
+ORDER BY age_seconds DESC
+`
+
+type ListOldestPendingTaskAgeByNexusRow struct {
+	NexusInstanceID int64
+	NexusName       string
+	AgeSeconds      int64
+}
+
+func (q *Queries) ListOldestPendingTaskAgeByNexus(ctx context.Context) ([]ListOldestPendingTaskAgeByNexusRow, error) {
+	rows, err := q.db.Query(ctx, listOldestPendingTaskAgeByNexus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOldestPendingTaskAgeByNexusRow
+	for rows.Next() {
+		var i ListOldestPendingTaskAgeByNexusRow
+		if err := rows.Scan(&i.NexusInstanceID, &i.NexusName, &i.AgeSeconds); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleIndexingSchedules = `-- name: ListStaleIndexingSchedules :many
+SELECT
+  s.nexus_instance_id,
+  ni.name AS nexus_name,
+  s.name AS schedule_name,
+  s.scan_type,
+  COALESCE(EXTRACT(EPOCH FROM now() - s.next_run_at), 0)::bigint AS age_seconds
+FROM indexing_schedules s
+JOIN nexus_instances ni ON ni.id = s.nexus_instance_id
+WHERE s.enabled
+  AND s.next_run_at IS NOT NULL
+  AND s.next_run_at < now()
+ORDER BY age_seconds DESC, ni.name, s.name
+LIMIT 100
+`
+
+type ListStaleIndexingSchedulesRow struct {
+	NexusInstanceID int64
+	NexusName       string
+	ScheduleName    string
+	ScanType        string
+	AgeSeconds      int64
+}
+
+func (q *Queries) ListStaleIndexingSchedules(ctx context.Context) ([]ListStaleIndexingSchedulesRow, error) {
+	rows, err := q.db.Query(ctx, listStaleIndexingSchedules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStaleIndexingSchedulesRow
+	for rows.Next() {
+		var i ListStaleIndexingSchedulesRow
+		if err := rows.Scan(
+			&i.NexusInstanceID,
+			&i.NexusName,
+			&i.ScheduleName,
+			&i.ScanType,
+			&i.AgeSeconds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

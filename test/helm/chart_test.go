@@ -21,10 +21,15 @@ func TestDefaultRenderUsesSeparateImagesAndReleaseScopedSelectors(t *testing.T) 
 	manifests := renderChart(t)
 
 	service := requireManifest(t, manifests, "Service", "nexus-lens-nexus-lens")
+	serviceAccount := requireManifest(t, manifests, "ServiceAccount", "nexus-lens-nexus-lens")
 	apiDeployment := requireManifest(t, manifests, "Deployment", "nexus-lens-nexus-lens-api")
 	workerDeployment := requireManifest(t, manifests, "Deployment", "nexus-lens-nexus-lens-worker")
 	requireNoManifest(t, manifests, "ServiceMonitor", "nexus-lens-nexus-lens")
 	requireNoManifest(t, manifests, "PrometheusRule", "nexus-lens-nexus-lens")
+	requireNoManifest(t, manifests, "Ingress", "nexus-lens-nexus-lens")
+	requireNoManifest(t, manifests, "NetworkPolicy", "nexus-lens-nexus-lens")
+
+	assertString(t, mapAt(t, serviceAccount, "metadata"), "name", "nexus-lens-nexus-lens")
 
 	serviceSelector := mapAt(t, service, "spec", "selector")
 	assertString(t, serviceSelector, "app.kubernetes.io/name", "nexus-lens")
@@ -33,12 +38,17 @@ func TestDefaultRenderUsesSeparateImagesAndReleaseScopedSelectors(t *testing.T) 
 
 	apiLabels := mapAt(t, apiDeployment, "spec", "template", "metadata", "labels")
 	apiSelector := mapAt(t, apiDeployment, "spec", "selector", "matchLabels")
+	apiPodSpec := mapAt(t, apiDeployment, "spec", "template", "spec")
 	assertString(t, apiLabels, "app.kubernetes.io/instance", "nexus-lens")
 	assertString(t, apiSelector, "app.kubernetes.io/instance", "nexus-lens")
+	assertString(t, apiPodSpec, "serviceAccountName", "nexus-lens-nexus-lens")
+	assertBool(t, mapAt(t, apiPodSpec, "securityContext"), "runAsNonRoot", true)
 
 	apiContainer := requireContainer(t, apiDeployment, "api")
 	assertString(t, apiContainer, "image", "ghcr.io/example/nexus-lens-api:dev")
 	assertString(t, apiContainer, "imagePullPolicy", "IfNotPresent")
+	assertBool(t, mapAt(t, apiContainer, "securityContext"), "readOnlyRootFilesystem", true)
+	assertString(t, mapAt(t, apiContainer, "resources", "requests"), "memory", "128Mi")
 	apiEnv := envByName(t, apiContainer)
 	assertEnvValue(t, apiEnv, "NEXUS_LENS_ADDR", ":5601")
 	assertEnvValue(t, apiEnv, "NEXUS_LENS_SESSION_COOKIE_SECURE", "true")
@@ -54,12 +64,17 @@ func TestDefaultRenderUsesSeparateImagesAndReleaseScopedSelectors(t *testing.T) 
 
 	workerLabels := mapAt(t, workerDeployment, "spec", "template", "metadata", "labels")
 	workerSelector := mapAt(t, workerDeployment, "spec", "selector", "matchLabels")
+	workerPodSpec := mapAt(t, workerDeployment, "spec", "template", "spec")
 	assertString(t, workerLabels, "app.kubernetes.io/instance", "nexus-lens")
 	assertString(t, workerSelector, "app.kubernetes.io/instance", "nexus-lens")
+	assertString(t, workerPodSpec, "serviceAccountName", "nexus-lens-nexus-lens")
+	assertBool(t, mapAt(t, workerPodSpec, "securityContext"), "runAsNonRoot", true)
 
 	workerContainer := requireContainer(t, workerDeployment, "worker")
 	assertString(t, workerContainer, "image", "ghcr.io/example/nexus-lens-worker:dev")
 	assertString(t, workerContainer, "imagePullPolicy", "IfNotPresent")
+	assertBool(t, mapAt(t, workerContainer, "securityContext"), "readOnlyRootFilesystem", true)
+	assertString(t, mapAt(t, workerContainer, "resources", "requests"), "memory", "256Mi")
 	workerEnv := envByName(t, workerContainer)
 	assertEnvSecretRef(t, workerEnv, "PGHOST", "nexus-lens-postgres", "host")
 	assertEnvValue(t, workerEnv, "NEXUS_LENS_RETENTION_INTERVAL_SECONDS", "3600")
@@ -72,6 +87,15 @@ func TestCustomRenderWiresSecretsMetricsAndComponentImages(t *testing.T) {
 image:
   tag: shared-tag
   pullPolicy: Always
+imagePullSecrets:
+  - name: private-registry
+serviceAccount:
+  create: true
+  name: lens-runtime
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/nexus-lens
+podAnnotations:
+  checksum/config: abc123
 api:
   replicas: 2
   port: 8080
@@ -129,15 +153,43 @@ metrics:
     labels:
       team: platform
     queueAgeSeconds: 99
+    staleScheduleAgeSeconds: 456
     failedRuns24h: 2
     highVerificationFindings: 3
     cleanupRunningAgeSeconds: 123
     cleanupFailedExecutions: 4
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: lens.example.test
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: lens-tls
+      hosts:
+        - lens.example.test
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+  egress:
+    enabled: true
 `)
 	manifests := renderChart(t, "-f", values)
 
+	serviceAccount := requireManifest(t, manifests, "ServiceAccount", "lens-runtime")
+	assertString(t, mapAt(t, serviceAccount, "metadata", "annotations"), "eks.amazonaws.com/role-arn", "arn:aws:iam::123456789012:role/nexus-lens")
+
 	apiDeployment := requireManifest(t, manifests, "Deployment", "nexus-lens-nexus-lens-api")
 	assertNumber(t, mapAt(t, apiDeployment, "spec"), "replicas", 2)
+	apiPodSpec := mapAt(t, apiDeployment, "spec", "template", "spec")
+	assertString(t, apiPodSpec, "serviceAccountName", "lens-runtime")
+	assertString(t, requireMap(t, sliceAt(t, apiPodSpec, "imagePullSecrets")[0]), "name", "private-registry")
+	assertString(t, mapAt(t, apiDeployment, "spec", "template", "metadata", "annotations"), "checksum/config", "abc123")
 	apiContainer := requireContainer(t, apiDeployment, "api")
 	assertString(t, apiContainer, "image", "registry.example.test/nexus-lens/api:api-tag")
 	assertString(t, apiContainer, "imagePullPolicy", "Never")
@@ -161,6 +213,8 @@ metrics:
 
 	workerDeployment := requireManifest(t, manifests, "Deployment", "nexus-lens-nexus-lens-worker")
 	assertNumber(t, mapAt(t, workerDeployment, "spec"), "replicas", 3)
+	workerPodSpec := mapAt(t, workerDeployment, "spec", "template", "spec")
+	assertString(t, workerPodSpec, "serviceAccountName", "lens-runtime")
 	workerContainer := requireContainer(t, workerDeployment, "worker")
 	assertString(t, workerContainer, "image", "registry.example.test/nexus-lens/worker:worker-tag")
 	assertString(t, workerContainer, "imagePullPolicy", "IfNotPresent")
@@ -187,8 +241,20 @@ metrics:
 	prometheusRule := requireManifest(t, manifests, "PrometheusRule", "nexus-lens-nexus-lens")
 	assertString(t, mapAt(t, prometheusRule, "metadata", "labels"), "team", "platform")
 	rules := sliceAt(t, requireMap(t, sliceAt(t, mapAt(t, prometheusRule, "spec"), "groups")[0]), "rules")
-	assertRuleExpr(t, rules, "NexusLensQueueBacklogOld", "nexus_lens_queue_oldest_pending_age_seconds > 99")
+	assertRuleExpr(t, rules, "NexusLensQueueBacklogOld", "nexus_lens_queue_oldest_pending_age_seconds_by_nexus > 99")
+	assertRuleExpr(t, rules, "NexusLensIndexingScheduleStale", "nexus_lens_indexing_schedule_stale_age_seconds > 456")
 	assertRuleExpr(t, rules, "NexusLensCleanupExecutionStuck", "nexus_lens_cleanup_oldest_running_age_seconds > 123")
+
+	ingress := requireManifest(t, manifests, "Ingress", "nexus-lens-nexus-lens")
+	assertString(t, mapAt(t, ingress, "metadata", "annotations"), "cert-manager.io/cluster-issuer", "letsencrypt")
+	assertString(t, mapAt(t, ingress, "spec"), "ingressClassName", "nginx")
+	assertString(t, requireMap(t, sliceAt(t, mapAt(t, ingress, "spec"), "rules")[0]), "host", "lens.example.test")
+
+	networkPolicy := requireManifest(t, manifests, "NetworkPolicy", "nexus-lens-nexus-lens")
+	policyTypes := sliceAt(t, mapAt(t, networkPolicy, "spec"), "policyTypes")
+	if len(policyTypes) != 2 {
+		t.Fatalf("policyTypes length = %d, want 2", len(policyTypes))
+	}
 }
 
 func TestHelmSchemaRejectsInvalidValues(t *testing.T) {
@@ -463,6 +529,21 @@ func assertNumber(t *testing.T, root map[string]any, key string, want int) {
 	}
 	if got != want {
 		t.Fatalf("%s = %d, want %d", key, got, want)
+	}
+}
+
+func assertBool(t *testing.T, root map[string]any, key string, want bool) {
+	t.Helper()
+	value, ok := root[key]
+	if !ok {
+		t.Fatalf("key %s not found", key)
+	}
+	got, ok := value.(bool)
+	if !ok {
+		t.Fatalf("key %s has type %T, want bool", key, value)
+	}
+	if got != want {
+		t.Fatalf("%s = %t, want %t", key, got, want)
 	}
 }
 

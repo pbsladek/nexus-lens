@@ -34,3 +34,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "nexus-lens.workerImagePullPolicy" -}}
 {{- default .Values.image.pullPolicy .Values.worker.image.pullPolicy -}}
 {{- end -}}
+
+{{- define "nexus-lens.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "nexus-lens.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}

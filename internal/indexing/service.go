@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -805,6 +806,18 @@ func (s *Service) PrometheusMetrics(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get oldest pending task age: %w", err)
 	}
+	taskCountsByNexus, err := s.queries.CountScanTasksByNexusStatus(ctx)
+	if err != nil {
+		return "", fmt.Errorf("count scan tasks by nexus status: %w", err)
+	}
+	oldestPendingAgeByNexus, err := s.queries.ListOldestPendingTaskAgeByNexus(ctx)
+	if err != nil {
+		return "", fmt.Errorf("get oldest pending task age by nexus: %w", err)
+	}
+	staleSchedules, err := s.queries.ListStaleIndexingSchedules(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list stale indexing schedules: %w", err)
+	}
 	cleanupCounts, err := s.queries.CountCleanupExecutionsByStatus(ctx)
 	if err != nil {
 		return "", fmt.Errorf("count cleanup executions by status: %w", err)
@@ -840,6 +853,21 @@ func (s *Service) PrometheusMetrics(ctx context.Context) (string, error) {
 	out.WriteString("# HELP nexus_lens_queue_oldest_pending_age_seconds Age in seconds of the oldest pending or retryable task.\n")
 	out.WriteString("# TYPE nexus_lens_queue_oldest_pending_age_seconds gauge\n")
 	fmt.Fprintf(&out, "nexus_lens_queue_oldest_pending_age_seconds %d\n", oldestPendingAge)
+	out.WriteString("# HELP nexus_lens_scan_tasks_by_nexus Current scan task count by Nexus and status.\n")
+	out.WriteString("# TYPE nexus_lens_scan_tasks_by_nexus gauge\n")
+	for _, row := range taskCountsByNexus {
+		fmt.Fprintf(&out, "nexus_lens_scan_tasks_by_nexus{nexus_instance_id=%q,nexus_name=%q,status=%q} %d\n", strconv.FormatInt(row.NexusInstanceID, 10), row.NexusName, row.Status, row.Count)
+	}
+	out.WriteString("# HELP nexus_lens_queue_oldest_pending_age_seconds_by_nexus Age in seconds of the oldest pending or retryable task by Nexus.\n")
+	out.WriteString("# TYPE nexus_lens_queue_oldest_pending_age_seconds_by_nexus gauge\n")
+	for _, row := range oldestPendingAgeByNexus {
+		fmt.Fprintf(&out, "nexus_lens_queue_oldest_pending_age_seconds_by_nexus{nexus_instance_id=%q,nexus_name=%q} %d\n", strconv.FormatInt(row.NexusInstanceID, 10), row.NexusName, row.AgeSeconds)
+	}
+	out.WriteString("# HELP nexus_lens_indexing_schedule_stale_age_seconds Age in seconds for enabled schedules whose next run is overdue.\n")
+	out.WriteString("# TYPE nexus_lens_indexing_schedule_stale_age_seconds gauge\n")
+	for _, row := range staleSchedules {
+		fmt.Fprintf(&out, "nexus_lens_indexing_schedule_stale_age_seconds{nexus_instance_id=%q,nexus_name=%q,schedule_name=%q,scan_type=%q} %d\n", strconv.FormatInt(row.NexusInstanceID, 10), row.NexusName, row.ScheduleName, row.ScanType, row.AgeSeconds)
+	}
 	out.WriteString("# HELP nexus_lens_cleanup_executions Current cleanup execution count by status.\n")
 	out.WriteString("# TYPE nexus_lens_cleanup_executions gauge\n")
 	for _, row := range cleanupCounts {

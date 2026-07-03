@@ -549,7 +549,7 @@ test.beforeEach(async ({ page }) => {
           json: {
             code: "cleanup_policy_invalid",
             message: "at least one candidate rule is required",
-            request_id: "test",
+            request_id: "req-sim-1",
             retryable: false,
           },
         });
@@ -781,6 +781,7 @@ test("applies artifact explorer filters", async ({ page }) => {
   await explorer.getByLabel("Repository", { exact: true }).fill("docker-hosted-a");
   await explorer.getByLabel("Search image or tag").fill("feature");
   await explorer.getByLabel("Older than days").fill("14");
+  await explorer.getByLabel("Query limit").fill("20");
   await explorer.getByRole("checkbox", { name: "Never downloaded" }).check();
 
   const tagRequest = page.waitForRequest((request) => {
@@ -790,6 +791,7 @@ test("applies artifact explorer filters", async ({ page }) => {
       url.searchParams.get("repository_name") === "docker-hosted-a" &&
       url.searchParams.get("search") === "feature" &&
       url.searchParams.get("older_than_days") === "14" &&
+      url.searchParams.get("limit") === "20" &&
       url.searchParams.get("never_downloaded") === "true"
     );
   });
@@ -996,6 +998,9 @@ test("validates and runs cleanup simulation", async ({ page }) => {
   await section.getByLabel("Policy YAML").fill("name: invalid");
   await section.getByRole("button", { name: "Simulate" }).click();
   await expect(section.getByText("at least one candidate rule is required")).toBeVisible();
+  await expect(section.getByText("code cleanup_policy_invalid")).toBeVisible();
+  await expect(section.getByText("request req-sim-1")).toBeVisible();
+  await expect(section.getByText("retryable false")).toBeVisible();
 
   await section.getByRole("button", { name: "Reset policy" }).click();
   const simulationRequest = page.waitForRequest((request) => {

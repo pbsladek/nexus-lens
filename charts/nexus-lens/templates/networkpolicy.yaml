@@ -1,0 +1,32 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nexus-lens.fullname" . }}
+  labels:
+    {{- include "nexus-lens.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nexus-lens.selectorLabels" . | nindent 6 }}
+  policyTypes:
+{{- if .Values.networkPolicy.ingress.enabled }}
+    - Ingress
+{{- end }}
+{{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+{{- end }}
+{{- if .Values.networkPolicy.ingress.enabled }}
+  ingress:
+    - from:
+        - namespaceSelector: {}
+{{- end }}
+{{- if .Values.networkPolicy.egress.enabled }}
+  egress:
+    - to:
+        - namespaceSelector: {}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+{{- end }}
+{{- end }}

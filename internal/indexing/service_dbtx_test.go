@@ -255,6 +255,12 @@ func TestServiceListRetryAndMetricsWithFakeDB(t *testing.T) {
 			return &fakeRows{rows: [][]any{scanTaskValues(99, 42, 7, TaskTypeRepositoryDiscovery, "repository-discovery", "pending", now)}}, nil
 		case strings.Contains(query, "CountScanTasksByStatus"):
 			return &fakeRows{rows: [][]any{{"pending", int64(2)}}}, nil
+		case strings.Contains(query, "CountScanTasksByNexusStatus"):
+			return &fakeRows{rows: [][]any{{int64(7), "local", "pending", int64(2)}}}, nil
+		case strings.Contains(query, "ListOldestPendingTaskAgeByNexus"):
+			return &fakeRows{rows: [][]any{{int64(7), "local", int64(120)}}}, nil
+		case strings.Contains(query, "ListStaleIndexingSchedules"):
+			return &fakeRows{rows: [][]any{{int64(7), "local", "recent-sync", ScanTypeRecentSync, int64(900)}}}, nil
 		case strings.Contains(query, "CountScanRunsByStatus24h"):
 			return &fakeRows{rows: [][]any{{"running", int64(1)}}}, nil
 		case strings.Contains(query, "CountOpenVerificationFindingsBySeverity"):
@@ -287,6 +293,9 @@ func TestServiceListRetryAndMetricsWithFakeDB(t *testing.T) {
 	}
 	for _, want := range []string{
 		`nexus_lens_scan_tasks{status="pending"} 2`,
+		`nexus_lens_scan_tasks_by_nexus{nexus_instance_id="7",nexus_name="local",status="pending"} 2`,
+		`nexus_lens_queue_oldest_pending_age_seconds_by_nexus{nexus_instance_id="7",nexus_name="local"} 120`,
+		`nexus_lens_indexing_schedule_stale_age_seconds{nexus_instance_id="7",nexus_name="local",schedule_name="recent-sync",scan_type="recent_sync"} 900`,
 		`nexus_lens_scan_runs_24h{status="running"} 1`,
 		`nexus_lens_verification_findings{status="open",severity="high"} 3`,
 		`nexus_lens_cleanup_executions{status="queued"} 4`,

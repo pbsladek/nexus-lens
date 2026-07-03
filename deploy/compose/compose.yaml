@@ -81,7 +81,7 @@ services:
       - ./.nexus-admin-password:/run/secrets/nexus-admin-password:ro
 
   web:
-    image: nginx:1.27-alpine
+    image: nginx:1.29.8-alpine
     ports:
       - "5173:80"
     volumes:

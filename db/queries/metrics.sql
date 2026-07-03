@@ -23,6 +23,43 @@ SELECT COALESCE(EXTRACT(EPOCH FROM now() - MIN(available_at)), 0)::bigint AS age
 FROM scan_tasks
 WHERE status IN ('pending', 'retryable');
 
+-- name: CountScanTasksByNexusStatus :many
+SELECT
+  t.nexus_instance_id,
+  ni.name AS nexus_name,
+  t.status,
+  count(*)::bigint AS count
+FROM scan_tasks t
+JOIN nexus_instances ni ON ni.id = t.nexus_instance_id
+GROUP BY t.nexus_instance_id, ni.name, t.status
+ORDER BY ni.name, t.status;
+
+-- name: ListOldestPendingTaskAgeByNexus :many
+SELECT
+  t.nexus_instance_id,
+  ni.name AS nexus_name,
+  COALESCE(EXTRACT(EPOCH FROM now() - MIN(t.available_at)), 0)::bigint AS age_seconds
+FROM scan_tasks t
+JOIN nexus_instances ni ON ni.id = t.nexus_instance_id
+WHERE t.status IN ('pending', 'retryable')
+GROUP BY t.nexus_instance_id, ni.name
+ORDER BY age_seconds DESC;
+
+-- name: ListStaleIndexingSchedules :many
+SELECT
+  s.nexus_instance_id,
+  ni.name AS nexus_name,
+  s.name AS schedule_name,
+  s.scan_type,
+  COALESCE(EXTRACT(EPOCH FROM now() - s.next_run_at), 0)::bigint AS age_seconds
+FROM indexing_schedules s
+JOIN nexus_instances ni ON ni.id = s.nexus_instance_id
+WHERE s.enabled
+  AND s.next_run_at IS NOT NULL
+  AND s.next_run_at < now()
+ORDER BY age_seconds DESC, ni.name, s.name
+LIMIT 100;
+
 -- name: CountCleanupExecutionsByStatus :many
 SELECT status, count(*)::bigint AS count
 FROM cleanup_executions

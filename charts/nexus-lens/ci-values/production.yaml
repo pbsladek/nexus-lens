@@ -1,0 +1,80 @@
+image:
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  - name: registry-credentials
+
+serviceAccount:
+  create: true
+  annotations:
+    app.kubernetes.io/part-of: nexus-lens
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+
+api:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+worker:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+nexus:
+  credentials:
+    existingSecret: nexus-lens-nexus
+
+postgres:
+  existingSecret: nexus-lens-postgres
+  sslMode: verify-full
+
+auth:
+  session:
+    cookieSecure: true
+  initialAdmin:
+    existingSecret: nexus-lens-initial-admin
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus
+  prometheusRule:
+    enabled: true
+    labels:
+      release: prometheus
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+  hosts:
+    - host: nexus-lens.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: nexus-lens-tls
+      hosts:
+        - nexus-lens.example.com
+
+networkPolicy:
+  enabled: true
+  ingress:
+    enabled: true
+  egress:
+    enabled: true

@@ -102,14 +102,72 @@ const defaultBaseURL =
 
 const apiBaseURL = import.meta.env.VITE_API_BASE_URL ?? defaultBaseURL;
 
-export async function getHealth(): Promise<HealthResponse> {
-  const response = await fetch(`${apiBaseURL}/api/v1/health`, {
+type ProblemResponse = {
+  message?: string;
+  detail?: string;
+  code?: string;
+  request_id?: string;
+  retryable?: boolean;
+};
+
+export class APIError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly requestID?: string;
+  readonly retryable?: boolean;
+
+  constructor(message: string, options: {
+    status: number;
+    code?: string;
+    requestID?: string;
+    retryable?: boolean;
+  }) {
+    super(message);
+    this.name = "APIError";
+    this.status = options.status;
+    this.code = options.code;
+    this.requestID = options.requestID;
+    this.retryable = options.retryable;
+  }
+}
+
+export function displayError(error: unknown, fallback: string): string {
+  if (error instanceof APIError) {
+    const details = [
+      error.code ? `code ${error.code}` : "",
+      error.requestID ? `request ${error.requestID}` : "",
+      error.retryable === undefined ? "" : `retryable ${String(error.retryable)}`,
+    ].filter(Boolean);
+    return details.length > 0 ? `${error.message} (${details.join(", ")})` : error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
+}
+
+async function apiJSON<T>(path: string, fallback: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiFetch(path, fallback, init);
+  return (await response.json()) as T;
+}
+
+async function apiVoid(path: string, fallback: string, init: RequestInit = {}): Promise<void> {
+  await apiFetch(path, fallback, init);
+}
+
+async function apiFetch(path: string, fallback: string, init: RequestInit = {}): Promise<Response> {
+  const response = await fetch(`${apiBaseURL}${path}`, {
     credentials: "include",
+    ...init,
   });
   if (!response.ok) {
-    throw new Error(`health request failed with status ${response.status}`);
+    throw await problemError(response, fallback);
   }
-  return (await response.json()) as HealthResponse;
+  return response;
+}
+
+export async function getHealth(): Promise<HealthResponse> {
+  return apiJSON<HealthResponse>("/api/v1/health", "health request failed");
 }
 
 export async function getMe(): Promise<AppUser | null> {
@@ -120,44 +178,29 @@ export async function getMe(): Promise<AppUser | null> {
     return null;
   }
   if (!response.ok) {
-    throw new Error(`me request failed with status ${response.status}`);
+    throw await problemError(response, `me request failed with status ${response.status}`);
   }
   return (await response.json()) as AppUser;
 }
 
 export async function login(credentials: LoginRequest): Promise<LoginResponse> {
-  const response = await fetch(`${apiBaseURL}/api/v1/session`, {
+  return apiJSON<LoginResponse>("/api/v1/session", "login failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(credentials),
   });
-  if (!response.ok) {
-    throw new Error(`login failed with status ${response.status}`);
-  }
-  return (await response.json()) as LoginResponse;
 }
 
 export async function logout(): Promise<void> {
-  const response = await fetch(`${apiBaseURL}/api/v1/session`, {
+  return apiVoid("/api/v1/session", "logout failed", {
     method: "DELETE",
-    credentials: "include",
   });
-  if (!response.ok) {
-    throw new Error(`logout failed with status ${response.status}`);
-  }
 }
 
 export async function getAdminStatus(): Promise<StatusResponse> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/status`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `admin status request failed with status ${response.status}`));
-  }
-  return (await response.json()) as StatusResponse;
+  return apiJSON<StatusResponse>("/api/v1/admin/status", "admin status request failed");
 }
 
 export async function listIndexRuns(limit?: number): Promise<IndexRunsResponse> {
@@ -166,13 +209,10 @@ export async function listIndexRuns(limit?: number): Promise<IndexRunsResponse> 
     params.set("limit", String(limit));
   }
   const query = params.toString();
-  const response = await fetch(`${apiBaseURL}/api/v1/index/runs${query ? `?${query}` : ""}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`index runs request failed with status ${response.status}`);
-  }
-  return (await response.json()) as IndexRunsResponse;
+  return apiJSON<IndexRunsResponse>(
+    `/api/v1/index/runs${query ? `?${query}` : ""}`,
+    "index runs request failed",
+  );
 }
 
 export async function listNexusInstances(limit?: number): Promise<{ instances: NexusInstance[] }> {
@@ -181,13 +221,10 @@ export async function listNexusInstances(limit?: number): Promise<{ instances: N
     params.set("limit", String(limit));
   }
   const query = params.toString();
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/nexus-instances${query ? `?${query}` : ""}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`nexus instances request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { instances: NexusInstance[] };
+  return apiJSON<{ instances: NexusInstance[] }>(
+    `/api/v1/admin/nexus-instances${query ? `?${query}` : ""}`,
+    "nexus instances request failed",
+  );
 }
 
 export async function listIndexingSchedules(
@@ -202,90 +239,65 @@ export async function listIndexingSchedules(
     params.set("limit", String(limit));
   }
   const query = params.toString();
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/indexing-schedules${query ? `?${query}` : ""}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`indexing schedules request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { schedules: IndexingSchedule[] };
+  return apiJSON<{ schedules: IndexingSchedule[] }>(
+    `/api/v1/admin/indexing-schedules${query ? `?${query}` : ""}`,
+    "indexing schedules request failed",
+  );
 }
 
 export async function upsertIndexingSchedule(
   request: UpsertIndexingScheduleRequest,
 ): Promise<IndexingSchedule> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/indexing-schedules`, {
+  return apiJSON<IndexingSchedule>("/api/v1/admin/indexing-schedules", "save indexing schedule failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `save indexing schedule failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexingSchedule;
 }
 
 export async function updateNexusRateLimits(
   nexusInstanceID: number,
   request: RateLimitSettings,
 ): Promise<IndexingControl> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/nexus/${nexusInstanceID}/rate-limits`, {
+  return apiJSON<IndexingControl>(
+    `/api/v1/admin/nexus/${nexusInstanceID}/rate-limits`,
+    "save rate limits failed",
+    {
     method: "PUT",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
-  });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `save rate limits failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexingControl;
+    },
+  );
 }
 
 export async function getRetentionSettings(): Promise<RetentionSettings> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/retention-settings`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`retention settings request failed with status ${response.status}`);
-  }
-  return (await response.json()) as RetentionSettings;
+  return apiJSON<RetentionSettings>("/api/v1/admin/retention-settings", "retention settings request failed");
 }
 
 export async function updateRetentionSettings(
   request: RetentionSettings,
 ): Promise<RetentionSettings> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/retention-settings`, {
+  return apiJSON<RetentionSettings>("/api/v1/admin/retention-settings", "save retention settings failed", {
     method: "PUT",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `save retention settings failed with status ${response.status}`));
-  }
-  return (await response.json()) as RetentionSettings;
 }
 
 export async function startIndexRun(request: StartIndexRunRequest): Promise<IndexRun> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/runs`, {
+  return apiJSON<IndexRun>("/api/v1/index/runs", "start index run failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `start index run failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexRun;
 }
 
 export async function listIndexTasks(scanRunID?: number): Promise<IndexTasksResponse> {
@@ -294,35 +306,22 @@ export async function listIndexTasks(scanRunID?: number): Promise<IndexTasksResp
     params.set("scan_run_id", String(scanRunID));
   }
   params.set("limit", "100");
-  const response = await fetch(`${apiBaseURL}/api/v1/index/tasks?${params.toString()}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`index tasks request failed with status ${response.status}`);
-  }
-  return (await response.json()) as IndexTasksResponse;
+  return apiJSON<IndexTasksResponse>(
+    `/api/v1/index/tasks?${params.toString()}`,
+    "index tasks request failed",
+  );
 }
 
 export async function retryIndexTask(taskID: number): Promise<IndexTask> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/tasks/${taskID}/retry`, {
+  return apiJSON<IndexTask>(`/api/v1/index/tasks/${taskID}/retry`, "retry index task failed", {
     method: "POST",
-    credentials: "include",
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `retry index task failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexTask;
 }
 
 export async function cancelIndexRun(scanRunID: number): Promise<IndexRun> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/runs/${scanRunID}/cancel`, {
+  return apiJSON<IndexRun>(`/api/v1/index/runs/${scanRunID}/cancel`, "cancel index run failed", {
     method: "POST",
-    credentials: "include",
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `cancel index run failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexRun;
 }
 
 export async function listVerificationFindings(options: {
@@ -337,16 +336,10 @@ export async function listVerificationFindings(options: {
     params.set("status", options.status);
   }
   params.set("limit", "100");
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/index/verification/findings?${params.toString()}`,
-    {
-      credentials: "include",
-    },
+  return apiJSON<VerificationFindingsResponse>(
+    `/api/v1/index/verification/findings?${params.toString()}`,
+    "verification findings request failed",
   );
-  if (!response.ok) {
-    throw new Error(`verification findings request failed with status ${response.status}`);
-  }
-  return (await response.json()) as VerificationFindingsResponse;
 }
 
 export async function getAnalyticsOverview(nexusInstanceID?: number): Promise<AnalyticsOverview> {
@@ -354,125 +347,88 @@ export async function getAnalyticsOverview(nexusInstanceID?: number): Promise<An
   if (nexusInstanceID && nexusInstanceID > 0) {
     params.set("nexus_instance_id", String(nexusInstanceID));
   }
-  const response = await fetch(`${apiBaseURL}/api/v1/analytics/overview?${params.toString()}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`analytics overview request failed with status ${response.status}`);
-  }
-  return (await response.json()) as AnalyticsOverview;
+  return apiJSON<AnalyticsOverview>(
+    `/api/v1/analytics/overview?${params.toString()}`,
+    "analytics overview request failed",
+  );
 }
 
 export async function listRepositoryAnalytics(
   options: AnalyticsListOptions = {},
 ): Promise<{ repositories: RepositoryAnalytics[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/repositories?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ repositories: RepositoryAnalytics[] }>(
+    `/api/v1/analytics/repositories?${analyticsParams(options).toString()}`,
+    "repository analytics request failed",
   );
-  if (!response.ok) {
-    throw new Error(`repository analytics request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { repositories: RepositoryAnalytics[] };
 }
 
 export async function listImageAnalytics(
   options: AnalyticsListOptions = {},
 ): Promise<{ images: ImageAnalytics[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/images?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ images: ImageAnalytics[] }>(
+    `/api/v1/analytics/images?${analyticsParams(options).toString()}`,
+    "image analytics request failed",
   );
-  if (!response.ok) {
-    throw new Error(`image analytics request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { images: ImageAnalytics[] };
 }
 
 export async function listTagAnalytics(
   options: AnalyticsListOptions = {},
 ): Promise<{ tags: TagAnalytics[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/tags?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ tags: TagAnalytics[] }>(
+    `/api/v1/analytics/tags?${analyticsParams(options).toString()}`,
+    "tag analytics request failed",
   );
-  if (!response.ok) {
-    throw new Error(`tag analytics request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { tags: TagAnalytics[] };
 }
 
 export async function listTrendSeries(
   options: AnalyticsListOptions = {},
 ): Promise<{ points: TrendPoint[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/trends?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ points: TrendPoint[] }>(
+    `/api/v1/analytics/trends?${analyticsParams(options).toString()}`,
+    "trend series request failed",
   );
-  if (!response.ok) {
-    throw new Error(`trend series request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { points: TrendPoint[] };
 }
 
 export async function listTrendTopMovers(
   options: AnalyticsListOptions = {},
 ): Promise<{ movers: TrendTopMover[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/trends/top-movers?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ movers: TrendTopMover[] }>(
+    `/api/v1/analytics/trends/top-movers?${analyticsParams(options).toString()}`,
+    "trend top movers request failed",
   );
-  if (!response.ok) {
-    throw new Error(`trend top movers request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { movers: TrendTopMover[] };
 }
 
 export async function simulateCleanupPolicy(
   request: CleanupSimulationRequest,
 ): Promise<CleanupSimulationResult> {
-  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/simulations`, {
+  return apiJSON<CleanupSimulationResult>("/api/v1/cleanup/simulations", "cleanup simulation failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `cleanup simulation failed with status ${response.status}`));
-  }
-  return (await response.json()) as CleanupSimulationResult;
 }
 
 export async function listPackageFormatRepositories(
   options: AnalyticsListOptions = {},
 ): Promise<{ repositories: PackageFormatRepository[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/packages/repositories?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ repositories: PackageFormatRepository[] }>(
+    `/api/v1/packages/repositories?${analyticsParams(options).toString()}`,
+    "package repositories request failed",
   );
-  if (!response.ok) {
-    throw new Error(`package repositories request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { repositories: PackageFormatRepository[] };
 }
 
 export async function requestCleanupExecution(
   request: CleanupExecutionRequest,
 ): Promise<CleanupExecution> {
-  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions`, {
+  return apiJSON<CleanupExecution>("/api/v1/cleanup/executions", "cleanup execution failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `cleanup execution failed with status ${response.status}`));
-  }
-  return (await response.json()) as CleanupExecution;
 }
 
 export async function listCleanupExecutions(options: AnalyticsListOptions = {}): Promise<{ executions: CleanupExecution[] }> {
@@ -483,13 +439,10 @@ export async function listCleanupExecutions(options: AnalyticsListOptions = {}):
   if (options.limit && options.limit > 0) {
     params.set("limit", String(options.limit));
   }
-  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions?${params.toString()}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`cleanup executions request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { executions: CleanupExecution[] };
+  return apiJSON<{ executions: CleanupExecution[] }>(
+    `/api/v1/cleanup/executions?${params.toString()}`,
+    "cleanup executions request failed",
+  );
 }
 
 export async function listCleanupExecutionEvents(
@@ -497,25 +450,18 @@ export async function listCleanupExecutionEvents(
   limit = 200,
 ): Promise<{ events: CleanupExecutionEvent[] }> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/cleanup/executions/${cleanupExecutionID}/events?${params.toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ events: CleanupExecutionEvent[] }>(
+    `/api/v1/cleanup/executions/${cleanupExecutionID}/events?${params.toString()}`,
+    "cleanup execution events request failed",
   );
-  if (!response.ok) {
-    throw new Error(`cleanup execution events request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { events: CleanupExecutionEvent[] };
 }
 
 export async function cancelCleanupExecution(cleanupExecutionID: number): Promise<CleanupExecution> {
-  const response = await fetch(`${apiBaseURL}/api/v1/cleanup/executions/${cleanupExecutionID}/cancel`, {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `cleanup execution cancel failed with status ${response.status}`));
-  }
-  return (await response.json()) as CleanupExecution;
+  return apiJSON<CleanupExecution>(
+    `/api/v1/cleanup/executions/${cleanupExecutionID}/cancel`,
+    "cleanup execution cancel failed",
+    { method: "POST" },
+  );
 }
 
 export async function listTagPatterns(limit?: number): Promise<{ patterns: TagPattern[] }> {
@@ -524,127 +470,87 @@ export async function listTagPatterns(limit?: number): Promise<{ patterns: TagPa
     params.set("limit", String(limit));
   }
   const query = params.toString();
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/tag-patterns${query ? `?${query}` : ""}`, {
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`tag patterns request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { patterns: TagPattern[] };
+  return apiJSON<{ patterns: TagPattern[] }>(
+    `/api/v1/admin/tag-patterns${query ? `?${query}` : ""}`,
+    "tag patterns request failed",
+  );
 }
 
 export async function upsertTagPattern(request: UpsertTagPatternRequest): Promise<TagPattern> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/tag-patterns`, {
+  return apiJSON<TagPattern>("/api/v1/admin/tag-patterns", "save tag pattern failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `save tag pattern failed with status ${response.status}`));
-  }
-  return (await response.json()) as TagPattern;
 }
 
 export async function startTagReclassification(request: TagReclassificationRequest): Promise<IndexRun> {
-  const response = await fetch(`${apiBaseURL}/api/v1/admin/tag-patterns/reclassify`, {
+  return apiJSON<IndexRun>("/api/v1/admin/tag-patterns/reclassify", "start tag reclassification failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `start tag reclassification failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexRun;
 }
 
 export async function listTagPatternAnalytics(
   options: AnalyticsListOptions = {},
 ): Promise<{ patterns: TagPatternAnalytics[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/tag-patterns?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ patterns: TagPatternAnalytics[] }>(
+    `/api/v1/analytics/tag-patterns?${analyticsParams(options).toString()}`,
+    "tag pattern analytics request failed",
   );
-  if (!response.ok) {
-    throw new Error(`tag pattern analytics request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { patterns: TagPatternAnalytics[] };
 }
 
 export async function listTagPatternGrowth(
   options: AnalyticsListOptions = {},
 ): Promise<{ growth: TagPatternGrowth[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/tag-patterns/growth?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ growth: TagPatternGrowth[] }>(
+    `/api/v1/analytics/tag-patterns/growth?${analyticsParams(options).toString()}`,
+    "tag pattern growth request failed",
   );
-  if (!response.ok) {
-    throw new Error(`tag pattern growth request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { growth: TagPatternGrowth[] };
 }
 
 export async function listTagPatternExamples(
   options: AnalyticsListOptions = {},
 ): Promise<{ examples: TagPatternExample[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/tag-patterns/examples?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ examples: TagPatternExample[] }>(
+    `/api/v1/analytics/tag-patterns/examples?${analyticsParams(options).toString()}`,
+    "tag pattern examples request failed",
   );
-  if (!response.ok) {
-    throw new Error(`tag pattern examples request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { examples: TagPatternExample[] };
 }
 
 export async function listTagPatternSuggestions(
   options: AnalyticsListOptions = {},
 ): Promise<{ suggestions: TagPatternSuggestion[] }> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/analytics/tag-patterns/suggestions?${analyticsParams(options).toString()}`,
-    { credentials: "include" },
+  return apiJSON<{ suggestions: TagPatternSuggestion[] }>(
+    `/api/v1/analytics/tag-patterns/suggestions?${analyticsParams(options).toString()}`,
+    "tag pattern suggestions request failed",
   );
-  if (!response.ok) {
-    throw new Error(`tag pattern suggestions request failed with status ${response.status}`);
-  }
-  return (await response.json()) as { suggestions: TagPatternSuggestion[] };
 }
 
 export async function dismissVerificationFinding(findingID: number): Promise<VerificationFinding> {
-  const response = await fetch(
-    `${apiBaseURL}/api/v1/index/verification/findings/${findingID}/dismiss`,
-    {
-      method: "POST",
-      credentials: "include",
-    },
+  return apiJSON<VerificationFinding>(
+    `/api/v1/index/verification/findings/${findingID}/dismiss`,
+    "dismiss verification finding failed",
+    { method: "POST" },
   );
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `dismiss verification finding failed with status ${response.status}`));
-  }
-  return (await response.json()) as VerificationFinding;
 }
 
 export async function pauseNexusIndexing(
   nexusInstanceID: number,
   request: PauseIndexingRequest,
 ): Promise<IndexingControl> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/nexus/${nexusInstanceID}/pause`, {
+  return apiJSON<IndexingControl>(`/api/v1/index/nexus/${nexusInstanceID}/pause`, "pause indexing failed", {
     method: "POST",
-    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(request),
   });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `pause indexing failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexingControl;
 }
 
 function analyticsParams(options: AnalyticsListOptions): URLSearchParams {
@@ -690,20 +596,20 @@ function analyticsParams(options: AnalyticsListOptions): URLSearchParams {
 }
 
 export async function resumeNexusIndexing(nexusInstanceID: number): Promise<IndexingControl> {
-  const response = await fetch(`${apiBaseURL}/api/v1/index/nexus/${nexusInstanceID}/resume`, {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(await problemMessage(response, `resume indexing failed with status ${response.status}`));
-  }
-  return (await response.json()) as IndexingControl;
+  return apiJSON<IndexingControl>(
+    `/api/v1/index/nexus/${nexusInstanceID}/resume`,
+    "resume indexing failed",
+    { method: "POST" },
+  );
 }
 
-async function problemMessage(response: Response, fallback: string): Promise<string> {
-  const body = await response.json().catch(() => null);
-  if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
-    return body.message;
-  }
-  return fallback;
+async function problemError(response: Response, fallback: string): Promise<APIError> {
+  const body = (await response.json().catch(() => null)) as ProblemResponse | null;
+  const message = body?.message || body?.detail || `${fallback} with status ${response.status}`;
+  return new APIError(message, {
+    status: response.status,
+    code: body?.code,
+    requestID: body?.request_id ?? response.headers.get("x-request-id") ?? undefined,
+    retryable: body?.retryable,
+  });
 }
